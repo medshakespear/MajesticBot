@@ -13,8 +13,6 @@ LEADER_ROLE_NAME = "LEADER"
 
 SQUADS = {
     "Manschaft": "V",
-    "Autobots": "AB",
-    "ENNEAD": "EN",
     "Zero Vision": "ZVS",
     "SAT": "SAT",
     "Exeed": "수",
@@ -38,6 +36,8 @@ SQUADS = {
     "broken stars": "ᯓ✰",
     "NOX ZENITH CULT": "NZCT",
     "asgard warriors": "AW",
+    "Autobots": "AB",
+    "ENNEAD": "EN",
     "NR Esports.": "NR",
 }
 
