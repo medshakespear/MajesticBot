@@ -468,9 +468,9 @@ async def squad_info(interaction: discord.Interaction):
 
 # -------------------- INSTANT ROLE SYNC --------------------
 @bot.event
-await bot.wait_until_ready()
 async def on_member_update(before, after):
     role, tag = get_member_squad(after, after.guild)
+    await bot.wait_until_ready()
     await safe_nick_update(after, role, tag)
 
 # -------------------- SAFETY SYNC --------------------
