@@ -239,9 +239,12 @@ async def my_squad_info(interaction: discord.Interaction):
     )
 
 
-@bot.tree.command(name="all_squads_info")
+ @bot.tree.command(name="all_squads_info")
 async def all_squads_info(interaction: discord.Interaction):
+    embeds = []
     embed = discord.Embed(title="🛡️ All Squads", color=0x2F3136)
+
+    field_count = 0
 
     for role_name, tag in SQUADS.items():
         role = discord.utils.get(interaction.guild.roles, name=role_name)
@@ -256,7 +259,18 @@ async def all_squads_info(interaction: discord.Interaction):
             inline=False
         )
 
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+        field_count += 1
+
+        if field_count == 25:
+            embeds.append(embed)
+            embed = discord.Embed(color=0x2F3136)
+            field_count = 0
+
+    if field_count > 0:
+        embeds.append(embed)
+
+    await interaction.response.send_message(embeds=embeds, ephemeral=True)
+
     await log_action(
         interaction.guild,
         "📋 All Squads Viewed",
