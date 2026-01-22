@@ -13,6 +13,8 @@ LEADER_ROLE_NAME = "LEADER"
 
 SQUADS = {
     "Manschaft": "V",
+    "Autobots": "AB",
+    "ENNEAD": "EN",
     "Zero Vision": "ZVS",
     "SAT": "SAT",
     "Exeed": "수",
@@ -42,6 +44,8 @@ SQUADS = {
 
 # -------- EXPLICIT GUEST ROLE MAPPING --------
 GUEST_ROLES = {
+    "ENNEAD": "Ennead_guest",
+    "Autobots": "Autobots_guest",
     "Zero Vision": "Zero.Vision_guest",
     "SAT": "Sat_guest",
     "The void": "The.Void_guest",
