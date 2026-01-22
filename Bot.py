@@ -237,9 +237,7 @@ async def my_squad_info(interaction: discord.Interaction):
         "ℹ️ Squad Info Viewed",
         f"{interaction.user.mention} viewed their squad info."
     )
-
-
- @bot.tree.command(name="all_squads_info")
+@bot.tree.command(name="all_squads_info")
 async def all_squads_info(interaction: discord.Interaction):
     embeds = []
     embed = discord.Embed(title="🛡️ All Squads", color=0x2F3136)
@@ -271,11 +269,6 @@ async def all_squads_info(interaction: discord.Interaction):
 
     await interaction.response.send_message(embeds=embeds, ephemeral=True)
 
-    await log_action(
-        interaction.guild,
-        "📋 All Squads Viewed",
-        f"{interaction.user.mention} viewed all squads info."
-    )
 
 
 # -------------------- LEADER COMMANDS --------------------
