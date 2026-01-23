@@ -36,14 +36,17 @@ SQUADS = {
     "broken stars": "ᯓ✰",
     "NOX ZENITH CULT": "NZCT",
     "asgard warriors": "AW",
+    "NR Esports.": "NR",
     "Autobots": "AB",
     "ENNEAD": "EN",
+    "Ethereal": "ÆTH",
     "NR Esports.": "NR",
 }
 
 
 # -------- EXPLICIT GUEST ROLE MAPPING --------
 GUEST_ROLES = {
+    "Ethereal": "Ethereal_guest",
     "ENNEAD": "Ennead_guest",
     "Autobots": "Autobots_guest",
     "Zero Vision": "Zero.Vision_guest",
