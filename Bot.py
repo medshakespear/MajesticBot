@@ -268,8 +268,6 @@ async def all_squads_info(interaction: discord.Interaction):
         embeds.append(embed)
 
     await interaction.response.send_message(embeds=embeds, ephemeral=True)
-
-
     await log_action(
         interaction.guild,
         "📋 All Squads Viewed",
