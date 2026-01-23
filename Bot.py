@@ -270,6 +270,12 @@ async def all_squads_info(interaction: discord.Interaction):
     await interaction.response.send_message(embeds=embeds, ephemeral=True)
 
 
+    await log_action(
+        interaction.guild,
+        "📋 All Squads Viewed",
+        f"{interaction.user.mention}
+viewed all squads info."
+    )
 
 # -------------------- LEADER COMMANDS --------------------
 @bot.tree.command(name="give_guest")
