@@ -271,8 +271,7 @@ async def all_squads_info(interaction: discord.Interaction):
     await log_action(
         interaction.guild,
         "📋 All Squads Viewed",
-        f"{interaction.user.mention}
-viewed all squads info."
+        f"{interaction.user.mention} viewed all squads info."
     )
 
 # -------------------- LEADER COMMANDS --------------------
