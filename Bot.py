@@ -40,7 +40,6 @@ SQUADS = {
     "Autobots": "AB",
     "ENNEAD": "EN",
     "Ethereal": "ÆTH",
-    "NR Esports.": "NR",
 }
 
 
