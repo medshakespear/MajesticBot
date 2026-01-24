@@ -46,6 +46,7 @@ SQUADS = {
 
 # -------- EXPLICIT GUEST ROLE MAPPING --------
 GUEST_ROLES = {
+    "Test": "Test_guest",
     "Ethereal": "Ethereal_guest",
     "ENNEAD": "Ennead_guest",
     "Autobots": "Autobots_guest",
@@ -72,7 +73,6 @@ GUEST_ROLES = {
     "Brilliant": "Brilliant_guest",
     "asgard warriors": "Asguard.Warriors_guest",
     "Manschaft": "Manschaft_guest",
-    "Test": "Test_guest",
 }
 
 
