@@ -124,7 +124,7 @@ def get_member_squad(member, guild):
         role = discord.utils.get(guild.roles, name=role_name)
         if role and role in member.roles:
             return role, tag
-    return
+    return None, None
 
 def get_leaders_for_squad(guild, squad_role):
     leader_role = discord.utils.get(guild.roles, name=LEADER_ROLE_NAME)
