@@ -40,6 +40,7 @@ SQUADS = {
     "Autobots": "AB",
     "ENNEAD": "EN",
     "Ethereal": "ÆTH",
+    "Test": "TST",
 }
 
 
@@ -71,6 +72,7 @@ GUEST_ROLES = {
     "Brilliant": "Brilliant_guest",
     "asgard warriors": "Asguard.Warriors_guest",
     "Manschaft": "Manschaft_guest",
+    "Test": "Test_guest",
 }
 
 
