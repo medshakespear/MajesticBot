@@ -24,7 +24,7 @@ SQUADS = {
     "The void": "VD",
     "SRG": "SRG",
     "Blood Moon": "Blod",
-    "Meta breakers": "MS",
+    "Meta breakers": "MB",
     "Kit buu": "KITE",
     "Red Raptors": "RED",
     "TEENYI BAMBUSEL": "TNY",
@@ -40,13 +40,13 @@ SQUADS = {
     "Autobots": "AB",
     "ENNEAD": "EN",
     "Ethereal": "ÆTH",
-    "Test": "TST",
+    "浪 Ronin'": "DVNA",
 }
 
 
 # -------- EXPLICIT GUEST ROLE MAPPING --------
 GUEST_ROLES = {
-    "Test": "Test_guest",
+    "浪 Ronin'": "浪 Ronin'_guest",
     "Ethereal": "Ethereal_guest",
     "ENNEAD": "Ennead_guest",
     "Autobots": "Autobots_guest",
