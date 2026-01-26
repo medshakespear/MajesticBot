@@ -23,7 +23,6 @@ SQUADS = {
     "The void": "VD",
     "SRG": "SRG",
     "Blood Moon": "Blod",
-    "Meta breakers": "MB",
     "Kit buu": "KITE",
     "Red Raptors": "RED",
     "TEENYI BAMBUSEL": "TNY",
