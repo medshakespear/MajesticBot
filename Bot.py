@@ -32,6 +32,7 @@ SQUADS = {
     "Agartha": "AG",
     "Emberblaze": "EMBR",
     "broken stars": "ᯓ✰",
+    "Meta breakers": "MB",
     "NOX ZENITH CULT": "NZCT",
     "asgard warriors": "AW",
     "NR Esports.": "NR",
