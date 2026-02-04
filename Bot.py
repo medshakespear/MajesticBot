@@ -164,6 +164,21 @@ async def on_ready():
         f"Bot logged in as **{bot.user}** and completed initial nickname sync."
     )
 
+# -------------------- INSTANT ROLE SYNC --------------------
+@bot.event
+async def on_member_update(before, after):
+    role, tag = get_member_squad(after, after.guild)
+    await bot.wait_until_ready()
+    await safe_nick_update(after, role, tag)
+
+# -------------------- SAFETY SYNC --------------------
+@tasks.loop(minutes=5)
+async def safety_sync():
+    for guild in bot.guilds:
+        for member in guild.members:
+            role, tag = get_member_squad(member, guild)
+            await safe_nick_update(member, role, tag)
+
 
 # -------------------- MEMBER COMMANDS --------------------
 @bot.tree.command(name="help")
@@ -473,19 +488,5 @@ async def squad_info(interaction: discord.Interaction):
         f"{interaction.user.mention} viewed squad info for **{role.name}**"
     )
 
-# -------------------- INSTANT ROLE SYNC --------------------
-@bot.event
-async def on_member_update(before, after):
-    role, tag = get_member_squad(after, after.guild)
-    await bot.wait_until_ready()
-    await safe_nick_update(after, role, tag)
-
-# -------------------- SAFETY SYNC --------------------
-@tasks.loop(minutes=5)
-async def safety_sync():
-    for guild in bot.guilds:
-        for member in guild.members:
-            role, tag = get_member_squad(member, guild)
-            await safe_nick_update(member, role, tag)
 # -------------------- RUN --------------------
 bot.run(os.getenv("DISCORD_TOKEN"))
