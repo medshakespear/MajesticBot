@@ -481,7 +481,7 @@ async def on_member_update(before, after):
     await safe_nick_update(after, role, tag)
 
 # -------------------- SAFETY SYNC --------------------
-@tasks.loop(minutes=2)
+@tasks.loop(minutes=5)
 async def safety_sync():
     for guild in bot.guilds:
         for member in guild.members:
