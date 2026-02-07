@@ -28,7 +28,7 @@ SQUADS = {
     "Titans": "TTS",
     "Red Raptors": "RED",
     "TEENYI BAMBUSEL": "TNY",
-    "One More Esports": "OM",
+    "One More Esports": "1M",
     "Force X": "X͠",
     "Impuls": "IP",
     "Agartha": "AG",
