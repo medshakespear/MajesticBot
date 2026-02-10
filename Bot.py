@@ -149,6 +149,21 @@ async def log_action(guild: discord.Guild, title: str, description: str):
         print(f"[LOGGING ERROR] {e}")
 
 # -------------------- HELPERS --------------------
+async def wait_for_mention(interaction: discord.Interaction, timeout=30):
+    def check(msg: discord.Message):
+        return (
+            msg.author.id == interaction.user.id
+            and msg.channel.id == interaction.channel.id
+            and len(msg.mentions) == 1
+        )
+
+    try:
+        msg = await bot.wait_for("message", check=check, timeout=timeout)
+        return msg.mentions[0]
+    except asyncio.TimeoutError:
+        return None
+
+
 def remove_all_tags(name):
     for tag in ALL_TAGS:
         if name.startswith(f"{tag} "):
@@ -778,9 +793,28 @@ class LeaderPanelView(View):
         self.guest_role = guest_role
     
     @discord.ui.button(label="Add Member", style=discord.ButtonStyle.success, emoji="➕", row=0)
-    async def add_member_button(self, interaction: discord.Interaction, button: Button):
-        modal = ManageMemberModal(self.squad_role, self.tag, "add")
-        await interaction.response.send_modal(modal)
+async def add_member_button(self, interaction: discord.Interaction, button: Button):
+    await interaction.response.send_message(
+        "👑 **Mention the player to ADD to your squad** (`@player`)",
+        ephemeral=True
+    )
+
+    member = await wait_for_mention(interaction)
+    if not member:
+        return await interaction.followup.send("⏰ Time expired. Try again.", ephemeral=True)
+
+    # Remove other squad roles
+    for r_name in SQUADS:
+        r = discord.utils.get(interaction.guild.roles, name=r_name)
+        if r and r in member.roles:
+            await member.remove_roles(r)
+
+    await member.add_roles(self.squad_role)
+    await safe_nick_update(member, self.squad_role, self.tag)
+
+    await interaction.followup.send(
+        f"📜 **Royal Order Executed**\n{member.mention} has joined **{self.squad_name}** 👑"
+    )
     
     @discord.ui.button(label="Remove Member", style=discord.ButtonStyle.danger, emoji="➖", row=0)
     async def remove_member_button(self, interaction: discord.Interaction, button: Button):
