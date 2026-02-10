@@ -232,7 +232,6 @@ class PlayerSetupModal(Modal, title="Player Profile Setup"):
         self.player_role = role
     
     async def on_submit(self, interaction: discord.Interaction):
-        # Save player data
         player_key = str(self.user_id)
         squad_data["players"][player_key] = {
             "discord_id": self.user_id,
@@ -282,7 +281,6 @@ class AddMatchModal(Modal, title="Add Match Result"):
     )
     
     async def on_submit(self, interaction: discord.Interaction):
-        # Validate teams exist
         if self.team1.value not in SQUADS or self.team2.value not in SQUADS:
             await interaction.response.send_message(
                 "❌ One or both team names are invalid. Use exact squad names.",
@@ -290,7 +288,6 @@ class AddMatchModal(Modal, title="Add Match Result"):
             )
             return
         
-        # Parse result
         try:
             score1, score2 = map(int, self.result.value.split('-'))
         except:
@@ -300,31 +297,26 @@ class AddMatchModal(Modal, title="Add Match Result"):
             )
             return
         
-        # Update squad data
         team1_data = squad_data["squads"][self.team1.value]
         team2_data = squad_data["squads"][self.team2.value]
         
         if score1 > score2:
-            # Team 1 wins
             team1_data["wins"] += 1
             team1_data["points"] += 2
             team2_data["losses"] += 1
             result_text = f"🏆 **{self.team1.value}** defeated **{self.team2.value}**"
         elif score2 > score1:
-            # Team 2 wins
             team2_data["wins"] += 1
             team2_data["points"] += 2
             team1_data["losses"] += 1
             result_text = f"🏆 **{self.team2.value}** defeated **{self.team1.value}**"
         else:
-            # Draw
             team1_data["draws"] += 1
             team1_data["points"] += 1
             team2_data["draws"] += 1
             team2_data["points"] += 1
             result_text = f"🤝 **{self.team1.value}** drew with **{self.team2.value}**"
         
-        # Add to match history
         match_data = {
             "team1": self.team1.value,
             "team2": self.team2.value,
@@ -339,7 +331,6 @@ class AddMatchModal(Modal, title="Add Match Result"):
         
         save_data(squad_data)
         
-        # Create result embed
         embed = discord.Embed(
             title="📊 Match Result Added",
             description=result_text,
@@ -364,6 +355,220 @@ class AddMatchModal(Modal, title="Add Match Result"):
             f"{interaction.user.mention} added: {self.team1.value} vs {self.team2.value} ({self.result.value})"
         )
 
+class SetLogoModal(Modal, title="Set Squad Logo"):
+    logo_url = TextInput(
+        label="Logo URL",
+        placeholder="Paste Discord image link or Imgur URL",
+        required=True,
+        style=discord.TextStyle.long
+    )
+    
+    def __init__(self, squad_name: str):
+        super().__init__()
+        self.squad_name = squad_name
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        squad_data["squads"][self.squad_name]["logo_url"] = self.logo_url.value
+        save_data(squad_data)
+        
+        embed = discord.Embed(
+            title="✅ Logo Updated",
+            description=f"Logo set for **{self.squad_name}**",
+            color=discord.Color.green()
+        )
+        embed.set_thumbnail(url=self.logo_url.value)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await log_action(
+            interaction.guild,
+            "🖼️ Logo Updated",
+            f"{interaction.user.mention} updated logo for **{self.squad_name}**"
+        )
+
+class ManageRosterModal(Modal):
+    member_id = TextInput(
+        label="Member ID or @mention",
+        placeholder="Right-click user > Copy ID",
+        required=True
+    )
+    
+    def __init__(self, squad_name: str, roster_type: str):
+        super().__init__(title=f"Add to {'Main Roster' if roster_type == 'main' else 'Substitutes'}")
+        self.squad_name = squad_name
+        self.roster_type = roster_type
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        member_id_str = self.member_id.value.strip('<@!> ')
+        try:
+            member_id = int(member_id_str)
+            member = interaction.guild.get_member(member_id)
+        except:
+            await interaction.response.send_message("❌ Invalid member ID.", ephemeral=True)
+            return
+        
+        if not member:
+            await interaction.response.send_message("❌ Member not found.", ephemeral=True)
+            return
+        
+        squad_info = squad_data["squads"][self.squad_name]
+        
+        if self.roster_type == "main":
+            if member.id in squad_info["main_roster"]:
+                await interaction.response.send_message("⚠️ Already in main roster.", ephemeral=True)
+                return
+            if len(squad_info["main_roster"]) >= 5:
+                await interaction.response.send_message("❌ Main roster full (max 5).", ephemeral=True)
+                return
+            
+            if member.id in squad_info["subs"]:
+                squad_info["subs"].remove(member.id)
+            squad_info["main_roster"].append(member.id)
+            msg = f"⭐ {member.mention} added to main roster!"
+        else:
+            if member.id in squad_info["subs"]:
+                await interaction.response.send_message("⚠️ Already a substitute.", ephemeral=True)
+                return
+            if len(squad_info["subs"]) >= 3:
+                await interaction.response.send_message("❌ Subs full (max 3).", ephemeral=True)
+                return
+            
+            if member.id in squad_info["main_roster"]:
+                squad_info["main_roster"].remove(member.id)
+            squad_info["subs"].append(member.id)
+            msg = f"🔄 {member.mention} added to substitutes!"
+        
+        save_data(squad_data)
+        await interaction.response.send_message(msg, ephemeral=True)
+
+class ManageMemberModal(Modal):
+    member_id = TextInput(
+        label="Member ID or @mention",
+        placeholder="Right-click user > Copy ID",
+        required=True
+    )
+    
+    def __init__(self, squad_role, tag: str, action: str):
+        super().__init__(title=f"{'Add' if action == 'add' else 'Remove'} Member")
+        self.squad_role = squad_role
+        self.tag = tag
+        self.action = action
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        member_id_str = self.member_id.value.strip('<@!> ')
+        try:
+            member_id = int(member_id_str)
+            member = interaction.guild.get_member(member_id)
+        except:
+            await interaction.response.send_message("❌ Invalid member ID.", ephemeral=True)
+            return
+        
+        if not member:
+            await interaction.response.send_message("❌ Member not found.", ephemeral=True)
+            return
+        
+        if self.action == "add":
+            for r_name in SQUADS:
+                r = discord.utils.get(interaction.guild.roles, name=r_name)
+                if r and r in member.roles:
+                    await member.remove_roles(r)
+            
+            await member.add_roles(self.squad_role)
+            await safe_nick_update(member, self.squad_role, self.tag)
+            await interaction.response.send_message(f"✅ {member.mention} added to **{self.squad_role.name}**", ephemeral=True)
+            await log_action(
+                interaction.guild,
+                "➕ Member Added",
+                f"{interaction.user.mention} added {member.mention} to **{self.squad_role.name}**"
+            )
+        else:
+            if self.squad_role not in member.roles:
+                await interaction.response.send_message("❌ Member not in your squad.", ephemeral=True)
+                return
+            
+            await member.remove_roles(self.squad_role)
+            clean = remove_all_tags(member.display_name)
+            try:
+                await member.edit(nick=clean)
+            except:
+                pass
+            await interaction.response.send_message(f"➖ {member.mention} removed from **{self.squad_role.name}**", ephemeral=True)
+            await log_action(
+                interaction.guild,
+                "➖ Member Removed",
+                f"{interaction.user.mention} removed {member.mention} from **{self.squad_role.name}**"
+            )
+
+class ManageGuestModal(Modal):
+    member_id = TextInput(
+        label="Member ID or @mention",
+        placeholder="Right-click user > Copy ID",
+        required=True
+    )
+    
+    def __init__(self, guest_role, action: str):
+        super().__init__(title=f"{'Give' if action == 'give' else 'Remove'} Guest Role")
+        self.guest_role = guest_role
+        self.action = action
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        member_id_str = self.member_id.value.strip('<@!> ')
+        try:
+            member_id = int(member_id_str)
+            member = interaction.guild.get_member(member_id)
+        except:
+            await interaction.response.send_message("❌ Invalid member ID.", ephemeral=True)
+            return
+        
+        if not member:
+            await interaction.response.send_message("❌ Member not found.", ephemeral=True)
+            return
+        
+        if self.action == "give":
+            for r in member.roles:
+                if r.name.endswith("_guest"):
+                    await member.remove_roles(r)
+            await member.add_roles(self.guest_role)
+            await interaction.response.send_message(f"🎟️ {member.mention} is now a guest!", ephemeral=True)
+        else:
+            if self.guest_role not in member.roles:
+                await interaction.response.send_message("❌ Not a guest.", ephemeral=True)
+                return
+            await member.remove_roles(self.guest_role)
+            await interaction.response.send_message(f"🧹 Guest role removed from {member.mention}", ephemeral=True)
+
+class PromoteLeaderModal(Modal, title="Promote to Leader"):
+    member_id = TextInput(
+        label="Member ID or @mention",
+        placeholder="Right-click user > Copy ID",
+        required=True
+    )
+    
+    def __init__(self, squad_role):
+        super().__init__()
+        self.squad_role = squad_role
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        member_id_str = self.member_id.value.strip('<@!> ')
+        try:
+            member_id = int(member_id_str)
+            member = interaction.guild.get_member(member_id)
+        except:
+            await interaction.response.send_message("❌ Invalid member ID.", ephemeral=True)
+            return
+        
+        if not member or self.squad_role not in member.roles:
+            await interaction.response.send_message("❌ Member not in your squad.", ephemeral=True)
+            return
+        
+        leader_role_obj = discord.utils.get(interaction.guild.roles, name=LEADER_ROLE_NAME)
+        await member.add_roles(leader_role_obj)
+        await interaction.response.send_message(f"⭐ {member.mention} promoted to LEADER!", ephemeral=True)
+        await log_action(
+            interaction.guild,
+            "⭐ Leader Promoted",
+            f"{interaction.user.mention} promoted {member.mention} to LEADER"
+        )
+
 # -------------------- VIEWS --------------------
 class RoleSelectView(View):
     def __init__(self, user_id: int, squad_name: str):
@@ -371,7 +576,6 @@ class RoleSelectView(View):
         self.user_id = user_id
         self.squad_name = squad_name
         
-        # Create role selection dropdown
         options = [
             discord.SelectOption(label=role, emoji="⚔️" if role == "Jungler" else "🎮")
             for role in ROLES
@@ -387,154 +591,18 @@ class RoleSelectView(View):
     
     async def role_selected(self, interaction: discord.Interaction):
         if interaction.user.id != self.user_id:
-            await interaction.response.send_message(
-                "❌ This is not your setup panel.",
-                ephemeral=True
-            )
+            await interaction.response.send_message("❌ This is not your setup panel.", ephemeral=True)
             return
         
         selected_role = interaction.data["values"][0]
-        
-        # Show modal for player details
         modal = PlayerSetupModal(self.user_id, self.squad_name, selected_role)
         await interaction.response.send_modal(modal)
-
-class SquadMenuView(View):
-    def __init__(self, squad_role, squad_name: str, tag: str, is_public: bool = True):
-        super().__init__(timeout=None)
-        self.squad_role = squad_role
-        self.squad_name = squad_name
-        self.tag = tag
-        self.is_public = is_public
-    
-    @discord.ui.button(label="Squad Info", style=discord.ButtonStyle.primary, emoji="ℹ️")
-    async def squad_info_button(self, interaction: discord.Interaction, button: Button):
-        await self.show_squad_info(interaction)
-    
-    @discord.ui.button(label="Rankings", style=discord.ButtonStyle.secondary, emoji="🏆")
-    async def rankings_button(self, interaction: discord.Interaction, button: Button):
-        await self.show_rankings(interaction)
-    
-    @discord.ui.button(label="Setup Profile", style=discord.ButtonStyle.success, emoji="⚙️")
-    async def setup_profile_button(self, interaction: discord.Interaction, button: Button):
-        # Check if user is in a squad
-        role, _ = get_member_squad(interaction.user, interaction.guild)
-        if not role:
-            await interaction.response.send_message(
-                "❌ You must be in a squad to set up your profile.",
-                ephemeral=True
-            )
-            return
-        
-        squad_name = role.name
-        view = RoleSelectView(interaction.user.id, squad_name)
-        
-        embed = discord.Embed(
-            title="⚙️ Player Profile Setup",
-            description="Select your role to continue setting up your profile.",
-            color=discord.Color.blue()
-        )
-        
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-    
-    async def show_squad_info(self, interaction: discord.Interaction):
-        squad_info = squad_data["squads"].get(self.squad_name, {})
-        
-        embed = discord.Embed(
-            title=f"🛡️ {self.squad_name}",
-            color=self.squad_role.color if self.squad_role else discord.Color.blue()
-        )
-        
-        # Basic info
-        embed.add_field(name="Tag", value=f"`{self.tag}`", inline=True)
-        embed.add_field(name="Points", value=f"**{squad_info.get('points', 0)}**", inline=True)
-        embed.add_field(name="Members", value=len(self.squad_role.members) if self.squad_role else 0, inline=True)
-        
-        # Stats
-        wins = squad_info.get('wins', 0)
-        draws = squad_info.get('draws', 0)
-        losses = squad_info.get('losses', 0)
-        embed.add_field(
-            name="Record",
-            value=f"🟢 {wins}W - 🟡 {draws}D - 🔴 {losses}L",
-            inline=False
-        )
-        
-        # Championship info
-        champ_wins = squad_info.get('championship_wins', 0)
-        titles = squad_info.get('titles', [])
-        if champ_wins > 0:
-            embed.add_field(name="Championships", value=f"🏆 {champ_wins}", inline=True)
-        if titles:
-            embed.add_field(name="Titles", value=", ".join(titles), inline=False)
-        
-        # Main Roster
-        main_roster = squad_info.get('main_roster', [])
-        if main_roster:
-            roster_text = ""
-            for player_id in main_roster[:5]:
-                player_data = squad_data["players"].get(str(player_id), {})
-                if player_data:
-                    roster_text += f"**{player_data.get('role', 'N/A')}**: {player_data.get('ingame_name', 'Unknown')} (#{player_data.get('ingame_id', 'N/A')}) - {player_data.get('highest_rank', 'N/A')}\n"
-            if roster_text:
-                embed.add_field(name="⭐ Main Roster", value=roster_text, inline=False)
-        
-        # Subs
-        subs = squad_info.get('subs', [])
-        if subs:
-            subs_text = ""
-            for player_id in subs[:3]:
-                player_data = squad_data["players"].get(str(player_id), {})
-                if player_data:
-                    subs_text += f"**{player_data.get('role', 'N/A')}**: {player_data.get('ingame_name', 'Unknown')}\n"
-            if subs_text:
-                embed.add_field(name="🔄 Substitutes", value=subs_text, inline=False)
-        
-        # Leaders
-        leaders = get_leaders_for_squad(interaction.guild, self.squad_role) if self.squad_role else []
-        if leaders:
-            embed.add_field(name="👑 Leaders", value=", ".join(leaders), inline=False)
-        
-        # Guests
-        guest_role_name = GUEST_ROLES.get(self.squad_name)
-        if guest_role_name:
-            guest_role = discord.utils.get(interaction.guild.roles, name=guest_role_name)
-            if guest_role and guest_role.members:
-                guests = [m.display_name for m in guest_role.members[:10]]
-                embed.add_field(name="🎟️ Guests", value=", ".join(guests), inline=False)
-        
-        # Logo
-        logo_url = squad_info.get('logo_url')
-        if logo_url:
-            embed.set_thumbnail(url=logo_url)
-        
-        await interaction.response.send_message(embed=embed, ephemeral=not self.is_public)
-    
-    async def show_rankings(self, interaction: discord.Interaction):
-        rankings = get_squad_ranking()
-        
-        embed = discord.Embed(
-            title="🏆 Squad Rankings",
-            description="Rankings based on match performance",
-            color=discord.Color.gold()
-        )
-        
-        for i, squad in enumerate(rankings[:15], 1):
-            medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
-            embed.add_field(
-                name=f"{medal} {squad['tag']} {squad['name']}",
-                value=f"**{squad['points']}** pts | {squad['wins']}W-{squad['draws']}D-{squad['losses']}L",
-                inline=False
-            )
-        
-        await interaction.response.send_message(embed=embed, ephemeral=not self.is_public)
 
 class SquadBrowserView(View):
     def __init__(self, guild):
         super().__init__(timeout=180)
         self.guild = guild
         
-        # Create squad selection dropdown with all squads
         options = []
         for squad_name, tag in sorted(SQUADS.items()):
             options.append(
@@ -546,10 +614,9 @@ class SquadBrowserView(View):
                 )
             )
         
-        # Discord has a limit of 25 options per select menu
         select = Select(
             placeholder="🔍 Choose a squad to view...",
-            options=options[:25],  # Take first 25
+            options=options[:25],
             custom_id="squad_browser_select"
         )
         select.callback = self.squad_selected
@@ -557,14 +624,213 @@ class SquadBrowserView(View):
     
     async def squad_selected(self, interaction: discord.Interaction):
         selected_squad = interaction.data["values"][0]
-        
-        # Get squad role and tag
         squad_role = discord.utils.get(self.guild.roles, name=selected_squad)
         tag = SQUADS.get(selected_squad, "?")
         
-        # Create temporary view to show squad info
-        temp_view = SquadMenuView(squad_role, selected_squad, tag, is_public=True)
-        await temp_view.show_squad_info(interaction)
+        await show_squad_info(interaction, squad_role, selected_squad, tag, public=True)
+
+async def show_squad_info(interaction, squad_role, squad_name, tag, public=False):
+    """Shared function to display squad information"""
+    squad_info = squad_data["squads"].get(squad_name, {})
+    
+    embed = discord.Embed(
+        title=f"🛡️ {squad_name}",
+        color=squad_role.color if squad_role else discord.Color.blue()
+    )
+    
+    embed.add_field(name="Tag", value=f"`{tag}`", inline=True)
+    embed.add_field(name="Points", value=f"**{squad_info.get('points', 0)}**", inline=True)
+    embed.add_field(name="Members", value=len(squad_role.members) if squad_role else 0, inline=True)
+    
+    wins = squad_info.get('wins', 0)
+    draws = squad_info.get('draws', 0)
+    losses = squad_info.get('losses', 0)
+    embed.add_field(
+        name="Record",
+        value=f"🟢 {wins}W - 🟡 {draws}D - 🔴 {losses}L",
+        inline=False
+    )
+    
+    champ_wins = squad_info.get('championship_wins', 0)
+    titles = squad_info.get('titles', [])
+    if champ_wins > 0:
+        embed.add_field(name="Championships", value=f"🏆 {champ_wins}", inline=True)
+    if titles:
+        embed.add_field(name="Titles", value=", ".join(titles), inline=False)
+    
+    main_roster = squad_info.get('main_roster', [])
+    if main_roster:
+        roster_text = ""
+        for player_id in main_roster[:5]:
+            player_data = squad_data["players"].get(str(player_id), {})
+            if player_data:
+                roster_text += f"**{player_data.get('role', 'N/A')}**: {player_data.get('ingame_name', 'Unknown')} (#{player_data.get('ingame_id', 'N/A')}) - {player_data.get('highest_rank', 'N/A')}\n"
+        if roster_text:
+            embed.add_field(name="⭐ Main Roster", value=roster_text, inline=False)
+    
+    subs = squad_info.get('subs', [])
+    if subs:
+        subs_text = ""
+        for player_id in subs[:3]:
+            player_data = squad_data["players"].get(str(player_id), {})
+            if player_data:
+                subs_text += f"**{player_data.get('role', 'N/A')}**: {player_data.get('ingame_name', 'Unknown')}\n"
+        if subs_text:
+            embed.add_field(name="🔄 Substitutes", value=subs_text, inline=False)
+    
+    leaders = get_leaders_for_squad(interaction.guild, squad_role) if squad_role else []
+    if leaders:
+        embed.add_field(name="👑 Leaders", value=", ".join(leaders), inline=False)
+    
+    guest_role_name = GUEST_ROLES.get(squad_name)
+    if guest_role_name:
+        guest_role = discord.utils.get(interaction.guild.roles, name=guest_role_name)
+        if guest_role and guest_role.members:
+            guests = [m.display_name for m in guest_role.members[:10]]
+            embed.add_field(name="🎟️ Guests", value=", ".join(guests), inline=False)
+    
+    logo_url = squad_info.get('logo_url')
+    if logo_url:
+        embed.set_thumbnail(url=logo_url)
+    
+    await interaction.response.send_message(embed=embed, ephemeral=not public)
+
+class MemberPanelView(View):
+    def __init__(self):
+        super().__init__(timeout=None)
+    
+    @discord.ui.button(label="Browse Squads", style=discord.ButtonStyle.primary, emoji="🔍", row=0)
+    async def browse_squads_button(self, interaction: discord.Interaction, button: Button):
+        view = SquadBrowserView(interaction.guild)
+        embed = discord.Embed(
+            title="🔍 Squad Browser",
+            description="Select a squad from the dropdown to view their full information!",
+            color=discord.Color.blue()
+        )
+        await interaction.response.send_message(embed=embed, view=view)
+    
+    @discord.ui.button(label="Rankings", style=discord.ButtonStyle.secondary, emoji="🏆", row=0)
+    async def rankings_button(self, interaction: discord.Interaction, button: Button):
+        rankings = get_squad_ranking()
+        
+        embed = discord.Embed(
+            title="🏆 Squad Rankings",
+            description="Current standings based on match performance",
+            color=discord.Color.gold()
+        )
+        
+        for i, squad in enumerate(rankings[:20], 1):
+            medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"**{i}.**"
+            embed.add_field(
+                name=f"{medal} {squad['tag']} {squad['name']}",
+                value=f"**{squad['points']}** points | {squad['wins']}W-{squad['draws']}D-{squad['losses']}L",
+                inline=False
+            )
+        
+        await interaction.response.send_message(embed=embed)
+    
+    @discord.ui.button(label="My Squad", style=discord.ButtonStyle.success, emoji="🛡️", row=1)
+    async def my_squad_button(self, interaction: discord.Interaction, button: Button):
+        role, tag = get_member_squad(interaction.user, interaction.guild)
+        if not role:
+            await interaction.response.send_message("❌ You are not in a squad.", ephemeral=True)
+            return
+        
+        await show_squad_info(interaction, role, role.name, tag, public=False)
+    
+    @discord.ui.button(label="Setup Profile", style=discord.ButtonStyle.success, emoji="⚙️", row=1)
+    async def setup_profile_button(self, interaction: discord.Interaction, button: Button):
+        role, _ = get_member_squad(interaction.user, interaction.guild)
+        if not role:
+            await interaction.response.send_message("❌ You must be in a squad to set up your profile.", ephemeral=True)
+            return
+        
+        view = RoleSelectView(interaction.user.id, role.name)
+        embed = discord.Embed(
+            title="⚙️ Player Profile Setup",
+            description="Select your role to continue setting up your profile.",
+            color=discord.Color.blue()
+        )
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
+    @discord.ui.button(label="Leave Squad", style=discord.ButtonStyle.danger, emoji="🚪", row=2)
+    async def leave_squad_button(self, interaction: discord.Interaction, button: Button):
+        role, _ = get_member_squad(interaction.user, interaction.guild)
+        if not role:
+            await interaction.response.send_message("❌ You are not in a squad.", ephemeral=True)
+            return
+        
+        await interaction.user.remove_roles(role)
+        await safe_nick_update(interaction.user, None, None)
+        await interaction.response.send_message("➖ You left your squad.", ephemeral=True)
+        await log_action(
+            interaction.guild,
+            "🚪 Squad Left",
+            f"{interaction.user.mention} left **{role.name}**"
+        )
+
+class LeaderPanelView(View):
+    def __init__(self, squad_role, tag: str, squad_name: str, guest_role):
+        super().__init__(timeout=None)
+        self.squad_role = squad_role
+        self.tag = tag
+        self.squad_name = squad_name
+        self.guest_role = guest_role
+    
+    @discord.ui.button(label="Add Member", style=discord.ButtonStyle.success, emoji="➕", row=0)
+    async def add_member_button(self, interaction: discord.Interaction, button: Button):
+        modal = ManageMemberModal(self.squad_role, self.tag, "add")
+        await interaction.response.send_modal(modal)
+    
+    @discord.ui.button(label="Remove Member", style=discord.ButtonStyle.danger, emoji="➖", row=0)
+    async def remove_member_button(self, interaction: discord.Interaction, button: Button):
+        modal = ManageMemberModal(self.squad_role, self.tag, "remove")
+        await interaction.response.send_modal(modal)
+    
+    @discord.ui.button(label="Set Main Roster", style=discord.ButtonStyle.primary, emoji="⭐", row=1)
+    async def set_main_button(self, interaction: discord.Interaction, button: Button):
+        modal = ManageRosterModal(self.squad_name, "main")
+        await interaction.response.send_modal(modal)
+    
+    @discord.ui.button(label="Set Substitute", style=discord.ButtonStyle.primary, emoji="🔄", row=1)
+    async def set_sub_button(self, interaction: discord.Interaction, button: Button):
+        modal = ManageRosterModal(self.squad_name, "sub")
+        await interaction.response.send_modal(modal)
+    
+    @discord.ui.button(label="Promote Leader", style=discord.ButtonStyle.secondary, emoji="👑", row=2)
+    async def promote_leader_button(self, interaction: discord.Interaction, button: Button):
+        modal = PromoteLeaderModal(self.squad_role)
+        await interaction.response.send_modal(modal)
+    
+    @discord.ui.button(label="Give Guest", style=discord.ButtonStyle.secondary, emoji="🎟️", row=2)
+    async def give_guest_button(self, interaction: discord.Interaction, button: Button):
+        if not self.guest_role:
+            await interaction.response.send_message("❌ Guest role not configured.", ephemeral=True)
+            return
+        modal = ManageGuestModal(self.guest_role, "give")
+        await interaction.response.send_modal(modal)
+    
+    @discord.ui.button(label="Remove Guest", style=discord.ButtonStyle.secondary, emoji="🧹", row=3)
+    async def remove_guest_button(self, interaction: discord.Interaction, button: Button):
+        if not self.guest_role:
+            await interaction.response.send_message("❌ Guest role not configured.", ephemeral=True)
+            return
+        modal = ManageGuestModal(self.guest_role, "remove")
+        await interaction.response.send_modal(modal)
+    
+    @discord.ui.button(label="Set Logo", style=discord.ButtonStyle.secondary, emoji="🖼️", row=3)
+    async def set_logo_button(self, interaction: discord.Interaction, button: Button):
+        modal = SetLogoModal(self.squad_name)
+        await interaction.response.send_modal(modal)
+
+class ModeratorPanelView(View):
+    def __init__(self):
+        super().__init__(timeout=None)
+    
+    @discord.ui.button(label="Add Match Result", style=discord.ButtonStyle.primary, emoji="📊", row=0)
+    async def add_match_button(self, interaction: discord.Interaction, button: Button):
+        modal = AddMatchModal()
+        await interaction.response.send_modal(modal)
 
 # -------------------- READY --------------------
 @bot.event
@@ -595,138 +861,28 @@ async def safety_sync():
             role, tag = get_member_squad(member, guild)
             await safe_nick_update(member, role, tag)
 
-# -------------------- MEMBER COMMANDS --------------------
-@bot.tree.command(name="help", description="Show all available bot commands")
-async def help_command(interaction: discord.Interaction):
+# -------------------- MAIN COMMANDS (3 PANELS) --------------------
+@bot.tree.command(name="members", description="Member panel - Browse squads, rankings, and manage your profile")
+async def members_panel(interaction: discord.Interaction):
+    view = MemberPanelView()
+    
     embed = discord.Embed(
-        title="🤖 Squad Bot - Command Guide",
-        description="Here are all the commands available to you!",
+        title="👥 Member Panel",
+        description="Use the buttons below to access member features",
         color=discord.Color.blue()
     )
-    
-    # Member Commands
     embed.add_field(
-        name="👥 Member Commands",
-        value=(
-            "`/help` - Show this help menu\n"
-            "`/squad_menu` - Interactive squad management hub\n"
-            "`/browse_squads` - View any squad's information\n"
-            "`/my_squad` - Quick view of your squad\n"
-            "`/rankings` - View current squad rankings\n"
-            "`/leave_squad` - Leave your current squad"
-        ),
+        name="Available Actions",
+        value="🔍 Browse all squads\n🏆 View rankings\n🛡️ View your squad\n⚙️ Setup your player profile\n🚪 Leave your squad",
         inline=False
     )
     
-    # Leader Commands
-    if is_leader(interaction.user):
-        embed.add_field(
-            name="👑 Leader Commands",
-            value=(
-                "`/add_member @user` - Add member to your squad\n"
-                "`/remove_member @user` - Remove member from squad\n"
-                "`/set_main_roster @user` - Add to main roster (max 5)\n"
-                "`/set_sub @user` - Add to substitutes (max 3)\n"
-                "`/promote_leader @user` - Promote to leader\n"
-                "`/give_guest @user` - Give guest role\n"
-                "`/remove_guest @user` - Remove guest role\n"
-                "`/set_logo <url>` - Set squad logo"
-            ),
-            inline=False
-        )
-    
-    # Moderator Commands
-    if is_moderator(interaction.user):
-        embed.add_field(
-            name="🛡️ Moderator Commands",
-            value="`/add_match` - Add match results between squads",
-            inline=False
-        )
-    
-    embed.set_footer(text="Use /squad_menu for the interactive interface!")
-    
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-@bot.tree.command(name="squad_menu", description="View squad info, rankings, and setup your profile")
-async def squad_menu(interaction: discord.Interaction):
-    role, tag = get_member_squad(interaction.user, interaction.guild)
-    squad_name = role.name if role else "No Squad"
-    
-    view = SquadMenuView(role, squad_name, tag, is_public=True)
-    
-    embed = discord.Embed(
-        title="🎮 Squad Management",
-        description="Use the buttons below to access squad features",
-        color=discord.Color.blue()
-    )
-    
     await interaction.response.send_message(embed=embed, view=view)
 
-@bot.tree.command(name="my_squad", description="Quick view of your squad")
-async def my_squad(interaction: discord.Interaction):
-    role, tag = get_member_squad(interaction.user, interaction.guild)
-    if not role:
-        await interaction.response.send_message("❌ You are not in a squad.", ephemeral=True)
-        return
-    
-    squad_name = role.name
-    view = SquadMenuView(role, squad_name, tag, is_public=False)
-    await view.show_squad_info(interaction)
-
-@bot.tree.command(name="browse_squads", description="Browse and view any squad's information")
-async def browse_squads(interaction: discord.Interaction):
-    view = SquadBrowserView(interaction.guild)
-    
-    embed = discord.Embed(
-        title="🔍 Squad Browser",
-        description="Select a squad from the dropdown below to view their full information, stats, roster, and more!",
-        color=discord.Color.blue()
-    )
-    embed.set_footer(text=f"Total squads: {len(SQUADS)}")
-    
-    await interaction.response.send_message(embed=embed, view=view)
-
-@bot.tree.command(name="rankings", description="View squad rankings")
-async def rankings_command(interaction: discord.Interaction):
-    rankings = get_squad_ranking()
-    
-    embed = discord.Embed(
-        title="🏆 Squad Rankings",
-        description="Current standings based on match performance",
-        color=discord.Color.gold()
-    )
-    
-    for i, squad in enumerate(rankings[:20], 1):
-        medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"**{i}.**"
-        embed.add_field(
-            name=f"{medal} {squad['tag']} {squad['name']}",
-            value=f"**{squad['points']}** points | {squad['wins']}W-{squad['draws']}D-{squad['losses']}L",
-            inline=False
-        )
-    
-    await interaction.response.send_message(embed=embed)
-
-@bot.tree.command(name="leave_squad", description="Leave your current squad")
-async def leave_squad(interaction: discord.Interaction):
-    role, _ = get_member_squad(interaction.user, interaction.guild)
-    if not role:
-        await interaction.response.send_message("❌ You are not in a squad.", ephemeral=True)
-        return
-    
-    await interaction.user.remove_roles(role)
-    await safe_nick_update(interaction.user, None, None)
-    await interaction.response.send_message("➖ You left your squad.", ephemeral=True)
-    await log_action(
-        interaction.guild,
-        "🚪 Squad Left",
-        f"{interaction.user.mention} left **{role.name}**"
-    )
-
-# -------------------- LEADER COMMANDS --------------------
-@bot.tree.command(name="add_member", description="Add a member to your squad (Leader)")
-async def add_member(interaction: discord.Interaction, member: discord.Member):
+@bot.tree.command(name="leader", description="Leader panel - Manage your squad (Leaders only)")
+async def leader_panel(interaction: discord.Interaction):
     if not is_leader(interaction.user):
-        await interaction.response.send_message("❌ Leader only.", ephemeral=True)
+        await interaction.response.send_message("❌ This command is for squad leaders only.", ephemeral=True)
         return
     
     squad_role, tag = get_member_squad(interaction.user, interaction.guild)
@@ -734,252 +890,44 @@ async def add_member(interaction: discord.Interaction, member: discord.Member):
         await interaction.response.send_message("❌ You are not in a squad.", ephemeral=True)
         return
     
-    # Remove from other squads
-    for r_name in SQUADS:
-        r = discord.utils.get(interaction.guild.roles, name=r_name)
-        if r and r in member.roles:
-            await member.remove_roles(r)
-    
-    await member.add_roles(squad_role)
-    await safe_nick_update(member, squad_role, tag)
-    
-    await interaction.response.send_message(f"✅ {member.mention} added to **{squad_role.name}**")
-    await log_action(
-        interaction.guild,
-        "➕ Member Added",
-        f"{interaction.user.mention} added {member.mention} to **{squad_role.name}**"
-    )
-
-@bot.tree.command(name="remove_member", description="Remove a member from your squad (Leader)")
-async def remove_member(interaction: discord.Interaction, member: discord.Member):
-    if not is_leader(interaction.user):
-        await interaction.response.send_message("❌ Leader only.", ephemeral=True)
-        return
-    
-    leader_role, _ = get_member_squad(interaction.user, interaction.guild)
-    if not leader_role or leader_role not in member.roles:
-        await interaction.response.send_message("❌ This member is not in your squad.", ephemeral=True)
-        return
-    
-    await member.remove_roles(leader_role)
-    clean = remove_all_tags(member.display_name)
-    try:
-        await member.edit(nick=clean)
-    except:
-        pass
-    
-    await interaction.response.send_message(f"➖ {member.mention} removed from **{leader_role.name}**")
-    await log_action(
-        interaction.guild,
-        "➖ Member Removed",
-        f"{interaction.user.mention} removed {member.mention} from **{leader_role.name}**"
-    )
-
-@bot.tree.command(name="set_main_roster", description="Set a player as main roster (Leader, max 5)")
-async def set_main_roster(interaction: discord.Interaction, member: discord.Member):
-    if not is_leader(interaction.user):
-        await interaction.response.send_message("❌ Leader only.", ephemeral=True)
-        return
-    
-    squad_role, _ = get_member_squad(interaction.user, interaction.guild)
-    member_role, _ = get_member_squad(member, interaction.guild)
-    
-    if squad_role != member_role:
-        await interaction.response.send_message("❌ Member must be in your squad.", ephemeral=True)
-        return
-    
-    squad_name = squad_role.name
-    squad_info = squad_data["squads"][squad_name]
-    
-    # Check if already in main roster
-    if member.id in squad_info["main_roster"]:
-        await interaction.response.send_message("⚠️ Already in main roster.", ephemeral=True)
-        return
-    
-    # Check limit
-    if len(squad_info["main_roster"]) >= 5:
-        await interaction.response.send_message("❌ Main roster is full (max 5).", ephemeral=True)
-        return
-    
-    # Remove from subs if there
-    if member.id in squad_info["subs"]:
-        squad_info["subs"].remove(member.id)
-    
-    squad_info["main_roster"].append(member.id)
-    save_data(squad_data)
-    
-    await interaction.response.send_message(f"⭐ {member.mention} added to main roster!")
-    await log_action(
-        interaction.guild,
-        "⭐ Main Roster Updated",
-        f"{interaction.user.mention} added {member.mention} to main roster"
-    )
-
-@bot.tree.command(name="set_sub", description="Set a player as substitute (Leader, max 3)")
-async def set_sub(interaction: discord.Interaction, member: discord.Member):
-    if not is_leader(interaction.user):
-        await interaction.response.send_message("❌ Leader only.", ephemeral=True)
-        return
-    
-    squad_role, _ = get_member_squad(interaction.user, interaction.guild)
-    member_role, _ = get_member_squad(member, interaction.guild)
-    
-    if squad_role != member_role:
-        await interaction.response.send_message("❌ Member must be in your squad.", ephemeral=True)
-        return
-    
-    squad_name = squad_role.name
-    squad_info = squad_data["squads"][squad_name]
-    
-    # Check if already in subs
-    if member.id in squad_info["subs"]:
-        await interaction.response.send_message("⚠️ Already a substitute.", ephemeral=True)
-        return
-    
-    # Check limit
-    if len(squad_info["subs"]) >= 3:
-        await interaction.response.send_message("❌ Substitute roster is full (max 3).", ephemeral=True)
-        return
-    
-    # Remove from main if there
-    if member.id in squad_info["main_roster"]:
-        squad_info["main_roster"].remove(member.id)
-    
-    squad_info["subs"].append(member.id)
-    save_data(squad_data)
-    
-    await interaction.response.send_message(f"🔄 {member.mention} added to substitutes!")
-    await log_action(
-        interaction.guild,
-        "🔄 Substitute Added",
-        f"{interaction.user.mention} added {member.mention} to substitutes"
-    )
-
-@bot.tree.command(name="promote_leader", description="Promote a member to leader (Leader)")
-async def promote_leader(interaction: discord.Interaction, member: discord.Member):
-    if not is_leader(interaction.user):
-        await interaction.response.send_message("❌ Leader only.", ephemeral=True)
-        return
-    
-    leader_role, _ = get_member_squad(interaction.user, interaction.guild)
-    member_role, _ = get_member_squad(member, interaction.guild)
-    
-    if leader_role != member_role:
-        await interaction.response.send_message("❌ Member must be in your squad.", ephemeral=True)
-        return
-    
-    leader_role_obj = discord.utils.get(interaction.guild.roles, name=LEADER_ROLE_NAME)
-    await member.add_roles(leader_role_obj)
-    
-    await interaction.response.send_message(f"⭐ {member.mention} promoted to LEADER!")
-    await log_action(
-        interaction.guild,
-        "⭐ Leader Promoted",
-        f"{interaction.user.mention} promoted {member.mention} to LEADER"
-    )
-
-@bot.tree.command(name="give_guest", description="Give guest role to a player (Leader)")
-async def give_guest(interaction: discord.Interaction, member: discord.Member):
-    if not is_leader(interaction.user):
-        await interaction.response.send_message("❌ Leader only.", ephemeral=True)
-        return
-    
-    squad_role, _ = get_member_squad(interaction.user, interaction.guild)
-    if not squad_role:
-        await interaction.response.send_message("❌ You are not in a squad.", ephemeral=True)
-        return
-    
     guest_role_name = GUEST_ROLES.get(squad_role.name)
-    if not guest_role_name:
-        await interaction.response.send_message("❌ Guest role not configured.", ephemeral=True)
-        return
+    guest_role = discord.utils.get(interaction.guild.roles, name=guest_role_name) if guest_role_name else None
     
-    guest_role = discord.utils.get(interaction.guild.roles, name=guest_role_name)
-    if not guest_role:
-        await interaction.response.send_message("❌ Guest role not found.", ephemeral=True)
-        return
-    
-    # Remove other guest roles
-    for r in member.roles:
-        if r.name.endswith("_guest"):
-            await member.remove_roles(r)
-    
-    await member.add_roles(guest_role)
-    
-    await interaction.response.send_message(f"🎟️ {member.mention} is now a guest of **{squad_role.name}**!")
-    await log_action(
-        interaction.guild,
-        "🎟️ Guest Added",
-        f"{interaction.user.mention} gave guest role to {member.mention}"
-    )
-
-@bot.tree.command(name="remove_guest", description="Remove guest role (Leader)")
-async def remove_guest(interaction: discord.Interaction, member: discord.Member):
-    if not is_leader(interaction.user):
-        await interaction.response.send_message("❌ Leader only.", ephemeral=True)
-        return
-    
-    squad_role, _ = get_member_squad(interaction.user, interaction.guild)
-    if not squad_role:
-        await interaction.response.send_message("❌ You are not in a squad.", ephemeral=True)
-        return
-    
-    guest_role_name = GUEST_ROLES.get(squad_role.name)
-    if not guest_role_name:
-        await interaction.response.send_message("❌ Guest role not configured.", ephemeral=True)
-        return
-    
-    guest_role = discord.utils.get(interaction.guild.roles, name=guest_role_name)
-    if not guest_role or guest_role not in member.roles:
-        await interaction.response.send_message("❌ Member is not a guest of your squad.", ephemeral=True)
-        return
-    
-    await member.remove_roles(guest_role)
-    await interaction.response.send_message(f"🧹 Guest role removed from {member.mention}")
-    await log_action(
-        interaction.guild,
-        "🧹 Guest Removed",
-        f"{interaction.user.mention} removed guest role from {member.mention}"
-    )
-
-@bot.tree.command(name="set_logo", description="Set your squad's logo (Leader)")
-async def set_logo(interaction: discord.Interaction, logo_url: str):
-    if not is_leader(interaction.user):
-        await interaction.response.send_message("❌ Leader only.", ephemeral=True)
-        return
-    
-    squad_role, _ = get_member_squad(interaction.user, interaction.guild)
-    if not squad_role:
-        await interaction.response.send_message("❌ You are not in a squad.", ephemeral=True)
-        return
-    
-    squad_name = squad_role.name
-    squad_data["squads"][squad_name]["logo_url"] = logo_url
-    save_data(squad_data)
+    view = LeaderPanelView(squad_role, tag, squad_role.name, guest_role)
     
     embed = discord.Embed(
-        title="✅ Logo Updated",
-        description=f"Logo set for **{squad_name}**",
-        color=discord.Color.green()
+        title=f"👑 Leader Panel - {squad_role.name}",
+        description="Manage your squad using the buttons below",
+        color=squad_role.color
     )
-    embed.set_thumbnail(url=logo_url)
+    embed.add_field(
+        name="Available Actions",
+        value="➕ Add members\n➖ Remove members\n⭐ Set main roster (max 5)\n🔄 Set substitutes (max 3)\n👑 Promote to leader\n🎟️ Manage guests\n🖼️ Set squad logo",
+        inline=False
+    )
     
-    await interaction.response.send_message(embed=embed)
-    await log_action(
-        interaction.guild,
-        "🖼️ Logo Updated",
-        f"{interaction.user.mention} updated logo for **{squad_name}**"
-    )
+    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-# -------------------- MODERATOR COMMANDS --------------------
-@bot.tree.command(name="add_match", description="Add a match result (Moderator)")
-async def add_match(interaction: discord.Interaction):
+@bot.tree.command(name="moderator", description="Moderator panel - Manage matches and standings (Moderators only)")
+async def moderator_panel(interaction: discord.Interaction):
     if not is_moderator(interaction.user):
-        await interaction.response.send_message("❌ Moderator only.", ephemeral=True)
+        await interaction.response.send_message("❌ This command is for moderators only.", ephemeral=True)
         return
     
-    modal = AddMatchModal()
-    await interaction.response.send_modal(modal)
+    view = ModeratorPanelView()
+    
+    embed = discord.Embed(
+        title="🛡️ Moderator Panel",
+        description="Manage tournament data using the buttons below",
+        color=discord.Color.red()
+    )
+    embed.add_field(
+        name="Available Actions",
+        value="📊 Add match results\n(More features coming soon)",
+        inline=False
+    )
+    
+    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 # -------------------- RUN --------------------
 bot.run(os.getenv("DISCORD_TOKEN"))
