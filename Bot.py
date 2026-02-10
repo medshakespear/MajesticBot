@@ -102,6 +102,66 @@ ROLE_EMOJIS = {
 ALL_TAGS = list(SQUADS.values())
 LOG_CHANNEL_NAME = "bot-logs"
 
+# Fun battle quotes for match results
+VICTORY_QUOTES = [
+    "💥 Absolute domination on the battlefield!",
+    "🔥 They came, they saw, they conquered!",
+    "⚡ Swift and merciless victory!",
+    "🌟 Legends were born in this battle!",
+    "👑 True royalty shines through combat!",
+    "💫 The stars aligned for victory!",
+    "🎯 Precision, power, perfection!",
+    "🦅 They soared above their opponents!",
+    "⚔️ Blades sang the song of triumph!",
+    "🏆 Champions forge their legacy!"
+]
+
+DEFEAT_QUOTES = [
+    "💀 A bitter lesson learned today...",
+    "🌑 Darkness fell upon the battlefield...",
+    "⛈️ The storm proved too fierce...",
+    "🥀 Even roses must wither sometimes...",
+    "🌊 Overwhelmed by the tide of battle...",
+    "❄️ Frozen by the opponent's might...",
+    "🔻 The higher they climb, the harder they fall...",
+    "🌪️ Swept away by superior tactics...",
+    "⚰️ Today belongs to their rivals...",
+    "🗡️ Outmatched, but not defeated in spirit!"
+]
+
+DRAW_QUOTES = [
+    "⚖️ Perfectly balanced, as all things should be!",
+    "🤝 Honor shared between equals!",
+    "🌓 Two forces meet in harmony!",
+    "⭐ Both sides shine with equal brilliance!",
+    "🎭 A tale of two kingdoms!",
+    "🔄 The wheel of fate spins evenly!",
+    "💠 Matched in skill, united in glory!",
+    "🎪 A spectacle of balanced power!",
+    "🌐 The universe maintains its equilibrium!",
+    "⚡ Lightning strikes twice with equal force!"
+]
+
+# Squad status based on recent performance
+SQUAD_MOODS = {
+    "fire": {"emoji": "🔥", "status": "ON FIRE", "desc": "Unstoppable momentum!"},
+    "rising": {"emoji": "📈", "status": "RISING", "desc": "Building strength!"},
+    "steady": {"emoji": "⚖️", "status": "STEADY", "desc": "Maintaining course"},
+    "struggling": {"emoji": "😰", "status": "STRUGGLING", "desc": "Needs regrouping"},
+    "crisis": {"emoji": "💀", "status": "IN CRISIS", "desc": "Dark times ahead..."}
+}
+
+# Achievement thresholds
+ACHIEVEMENTS = {
+    "first_blood": {"name": "🩸 First Blood", "desc": "Win your first match"},
+    "undefeated_5": {"name": "💪 Undefeated Streak (5)", "desc": "Win 5 matches without a loss"},
+    "comeback_king": {"name": "👑 Comeback King", "desc": "Win after a 3+ loss streak"},
+    "century_club": {"name": "💯 Century Club", "desc": "Reach 100 points"},
+    "warrior_50": {"name": "⚔️ 50 Battles Veteran", "desc": "Play 50 total matches"},
+    "perfect_10": {"name": "✨ Perfect 10", "desc": "Win 10 matches in a row"},
+    "champion": {"name": "🏆 Champion", "desc": "Win a championship title"},
+}
+
 # -------------------- DATA MANAGEMENT --------------------
 def load_data():
     """Load squad data from JSON file"""
@@ -128,7 +188,11 @@ def load_data():
             "logo_url": None,
             "main_roster": [],
             "subs": [],
-            "match_history": []
+            "match_history": [],
+            "current_streak": {"type": "none", "count": 0},  # win, loss, draw
+            "achievements": [],
+            "biggest_win_streak": 0,
+            "biggest_loss_streak": 0
         }
     
     save_data(data)
@@ -281,6 +345,138 @@ def find_match_by_id(match_id):
             return i, match
     return None, None
 
+def get_squad_mood(squad_name):
+    """Determine squad mood based on recent performance"""
+    squad_info = squad_data["squads"].get(squad_name, {})
+    
+    # Check recent match history (last 5 matches)
+    recent_matches = squad_info.get("match_history", [])[-5:]
+    if len(recent_matches) < 3:
+        return SQUAD_MOODS["steady"]
+    
+    recent_results = []
+    for match in recent_matches:
+        if match["team1"] == squad_name:
+            score1, score2 = map(int, match["score"].split('-'))
+            if score1 > score2:
+                recent_results.append("W")
+            elif score1 < score2:
+                recent_results.append("L")
+            else:
+                recent_results.append("D")
+        else:
+            score1, score2 = map(int, match["score"].split('-'))
+            if score2 > score1:
+                recent_results.append("W")
+            elif score2 < score1:
+                recent_results.append("L")
+            else:
+                recent_results.append("D")
+    
+    wins = recent_results.count("W")
+    losses = recent_results.count("L")
+    
+    # Determine mood
+    if wins >= 4:
+        return SQUAD_MOODS["fire"]
+    elif wins >= 3:
+        return SQUAD_MOODS["rising"]
+    elif losses >= 4:
+        return SQUAD_MOODS["crisis"]
+    elif losses >= 3:
+        return SQUAD_MOODS["struggling"]
+    else:
+        return SQUAD_MOODS["steady"]
+
+def update_streak(squad_name, result):
+    """Update win/loss/draw streak for a squad"""
+    squad_info = squad_data["squads"][squad_name]
+    current_streak = squad_info.get("current_streak", {"type": "none", "count": 0})
+    
+    if current_streak["type"] == result:
+        # Continue streak
+        current_streak["count"] += 1
+    else:
+        # New streak
+        current_streak = {"type": result, "count": 1}
+    
+    squad_info["current_streak"] = current_streak
+    
+    # Update biggest streaks
+    if result == "win" and current_streak["count"] > squad_info.get("biggest_win_streak", 0):
+        squad_info["biggest_win_streak"] = current_streak["count"]
+    elif result == "loss" and current_streak["count"] > squad_info.get("biggest_loss_streak", 0):
+        squad_info["biggest_loss_streak"] = current_streak["count"]
+    
+    return current_streak
+
+def check_achievements(squad_name):
+    """Check and award achievements"""
+    squad_info = squad_data["squads"][squad_name]
+    achievements = squad_info.get("achievements", [])
+    new_achievements = []
+    
+    # First blood
+    if squad_info["wins"] == 1 and "first_blood" not in achievements:
+        achievements.append("first_blood")
+        new_achievements.append(ACHIEVEMENTS["first_blood"])
+    
+    # Century club
+    if squad_info["points"] >= 100 and "century_club" not in achievements:
+        achievements.append("century_club")
+        new_achievements.append(ACHIEVEMENTS["century_club"])
+    
+    # Perfect 10
+    if squad_info.get("current_streak", {}).get("type") == "win" and squad_info.get("current_streak", {}).get("count") == 10 and "perfect_10" not in achievements:
+        achievements.append("perfect_10")
+        new_achievements.append(ACHIEVEMENTS["perfect_10"])
+    
+    # Undefeated 5
+    if squad_info.get("current_streak", {}).get("type") == "win" and squad_info.get("current_streak", {}).get("count") == 5 and "undefeated_5" not in achievements:
+        achievements.append("undefeated_5")
+        new_achievements.append(ACHIEVEMENTS["undefeated_5"])
+    
+    # Warrior 50
+    total_matches = squad_info["wins"] + squad_info["draws"] + squad_info["losses"]
+    if total_matches >= 50 and "warrior_50" not in achievements:
+        achievements.append("warrior_50")
+        new_achievements.append(ACHIEVEMENTS["warrior_50"])
+    
+    # Champion
+    if squad_info.get("championship_wins", 0) >= 1 and "champion" not in achievements:
+        achievements.append("champion")
+        new_achievements.append(ACHIEVEMENTS["champion"])
+    
+    squad_info["achievements"] = achievements
+    return new_achievements
+
+def get_head_to_head(squad1_name, squad2_name):
+    """Get head-to-head record between two squads"""
+    h2h = {"squad1_wins": 0, "squad2_wins": 0, "draws": 0, "total": 0}
+    
+    for match in squad_data["matches"]:
+        if (match["team1"] == squad1_name and match["team2"] == squad2_name) or \
+           (match["team1"] == squad2_name and match["team2"] == squad1_name):
+            h2h["total"] += 1
+            score1, score2 = map(int, match["score"].split('-'))
+            
+            if match["team1"] == squad1_name:
+                if score1 > score2:
+                    h2h["squad1_wins"] += 1
+                elif score2 > score1:
+                    h2h["squad2_wins"] += 1
+                else:
+                    h2h["draws"] += 1
+            else:
+                if score2 > score1:
+                    h2h["squad1_wins"] += 1
+                elif score1 > score2:
+                    h2h["squad2_wins"] += 1
+                else:
+                    h2h["draws"] += 1
+    
+    return h2h
+
 # -------------------- MODALS --------------------
 class PlayerSetupModal(Modal, title="🎭 Royal Profile Setup"):
     ingame_name = TextInput(
@@ -376,25 +572,58 @@ class AddMatchModal(Modal, title="⚔️ Record Battle Result"):
             )
             return
         
+        import random
+        
         team1_data = squad_data["squads"][self.team1.value]
         team2_data = squad_data["squads"][self.team2.value]
         
+        # Determine result and update stats with streaks
         if score1 > score2:
             team1_data["wins"] += 1
             team1_data["points"] += 2
             team2_data["losses"] += 1
+            
+            # Update streaks
+            team1_streak = update_streak(self.team1.value, "win")
+            team2_streak = update_streak(self.team2.value, "loss")
+            
             result_text = f"🏆 **{self.team1.value}** has conquered **{self.team2.value}** in glorious battle!"
+            flavor_quote = random.choice(VICTORY_QUOTES)
+            winner = self.team1.value
+            loser = self.team2.value
+            
         elif score2 > score1:
             team2_data["wins"] += 1
             team2_data["points"] += 2
             team1_data["losses"] += 1
+            
+            # Update streaks
+            team1_streak = update_streak(self.team1.value, "loss")
+            team2_streak = update_streak(self.team2.value, "win")
+            
             result_text = f"🏆 **{self.team2.value}** has conquered **{self.team1.value}** in glorious battle!"
+            flavor_quote = random.choice(VICTORY_QUOTES)
+            winner = self.team2.value
+            loser = self.team1.value
+            
         else:
             team1_data["draws"] += 1
             team1_data["points"] += 1
             team2_data["draws"] += 1
             team2_data["points"] += 1
+            
+            # Update streaks
+            team1_streak = update_streak(self.team1.value, "draw")
+            team2_streak = update_streak(self.team2.value, "draw")
+            
             result_text = f"⚔️ **{self.team1.value}** and **{self.team2.value}** fought to an honorable stalemate!"
+            flavor_quote = random.choice(DRAW_QUOTES)
+            winner = None
+            loser = None
+        
+        # Check for achievements
+        team1_achievements = check_achievements(self.team1.value)
+        team2_achievements = check_achievements(self.team2.value)
         
         # Generate unique match ID
         match_id = str(uuid.uuid4())[:8]
@@ -414,24 +643,51 @@ class AddMatchModal(Modal, title="⚔️ Record Battle Result"):
         
         save_data(squad_data)
         
+        # Create enhanced result embed
         embed = discord.Embed(
             title="📜 Battle Chronicles Updated",
-            description=result_text,
+            description=f"{result_text}\n\n*{flavor_quote}*",
             color=ROYAL_GOLD
         )
         embed.add_field(name="🆔 Match ID", value=f"`{match_id}`", inline=False)
         embed.add_field(name="⚔️ Score", value=f"**{self.result.value}**", inline=True)
+        
+        # Team 1 info with streak
+        team1_info = f"💎 {team1_data['points']} points | 🏆 {team1_data['wins']}W ⚔️ {team1_data['draws']}D 💀 {team1_data['losses']}L"
+        if team1_streak["count"] >= 3:
+            streak_emoji = "🔥" if team1_streak["type"] == "win" else "❄️" if team1_streak["type"] == "loss" else "⚡"
+            team1_info += f"\n{streak_emoji} **{team1_streak['count']} {team1_streak['type'].upper()} STREAK!**"
         embed.add_field(
             name=f"{SQUADS[self.team1.value]} {self.team1.value}",
-            value=f"💎 {team1_data['points']} points | 🏆 {team1_data['wins']}W ⚔️ {team1_data['draws']}D 💀 {team1_data['losses']}L",
+            value=team1_info,
             inline=False
         )
+        
+        # Team 2 info with streak
+        team2_info = f"💎 {team2_data['points']} points | 🏆 {team2_data['wins']}W ⚔️ {team2_data['draws']}D 💀 {team2_data['losses']}L"
+        if team2_streak["count"] >= 3:
+            streak_emoji = "🔥" if team2_streak["type"] == "win" else "❄️" if team2_streak["type"] == "loss" else "⚡"
+            team2_info += f"\n{streak_emoji} **{team2_streak['count']} {team2_streak['type'].upper()} STREAK!**"
         embed.add_field(
             name=f"{SQUADS[self.team2.value]} {self.team2.value}",
-            value=f"💎 {team2_data['points']} points | 🏆 {team2_data['wins']}W ⚔️ {team2_data['draws']}D 💀 {team2_data['losses']}L",
+            value=team2_info,
             inline=False
         )
-        embed.set_footer(text=f"Match ID: {match_id} (save this to delete if needed)")
+        
+        # Add achievements if any were earned
+        if team1_achievements or team2_achievements:
+            achievement_text = ""
+            if team1_achievements:
+                achievement_text += f"🎖️ **{self.team1.value}** earned:\n"
+                for ach in team1_achievements:
+                    achievement_text += f"{ach['name']} - *{ach['desc']}*\n"
+            if team2_achievements:
+                achievement_text += f"🎖️ **{self.team2.value}** earned:\n"
+                for ach in team2_achievements:
+                    achievement_text += f"{ach['name']} - *{ach['desc']}*\n"
+            embed.add_field(name="🏅 New Achievements!", value=achievement_text, inline=False)
+        
+        embed.set_footer(text=f"Match ID: {match_id} | May glory follow the victorious!")
         
         await interaction.response.send_message(embed=embed)
         await log_action(
@@ -565,6 +821,28 @@ async def show_squad_info(interaction, squad_role, squad_name, tag, public=False
         value=f"🏆 {wins}W • ⚔️ {draws}D • 💀 {losses}L\n📊 Total: {total_battles} | Win Rate: **{win_rate:.1f}%**",
         inline=False
     )
+    
+    # Current streak and mood
+    current_streak = squad_info.get("current_streak", {"type": "none", "count": 0})
+    mood = get_squad_mood(squad_name)
+    
+    status_text = f"{mood['emoji']} **{mood['status']}** - {mood['desc']}"
+    if current_streak["count"] >= 2:
+        streak_emoji = "🔥" if current_streak["type"] == "win" else "❄️" if current_streak["type"] == "loss" else "⚡"
+        status_text += f"\n{streak_emoji} Current Streak: **{current_streak['count']} {current_streak['type'].upper()}**"
+    
+    embed.add_field(name="💫 Kingdom Status", value=status_text, inline=False)
+    
+    # Achievements
+    achievements = squad_info.get("achievements", [])
+    if achievements:
+        achievement_text = ""
+        for ach_key in achievements[:5]:  # Show first 5
+            if ach_key in ACHIEVEMENTS:
+                achievement_text += f"{ACHIEVEMENTS[ach_key]['name']}\n"
+        if len(achievements) > 5:
+            achievement_text += f"*...and {len(achievements) - 5} more!*"
+        embed.add_field(name="🏅 Achievements Unlocked", value=achievement_text, inline=False)
     
     # Championships and Titles
     champ_wins = squad_info.get('championship_wins', 0)
@@ -800,6 +1078,16 @@ class HelpCategoryView(View):
             embed.add_field(
                 name="/profile @user (optional)",
                 value="🎭 View a warrior's profile publicly. Leave blank to view your own.\n*Example: `/profile` or `/profile @JohnDoe`*",
+                inline=False
+            )
+            embed.add_field(
+                name="/rivalry squad1 squad2",
+                value="⚔️ View head-to-head battle statistics between two kingdoms\n*Example: `/rivalry ROYALS Manschaft`*",
+                inline=False
+            )
+            embed.add_field(
+                name="/fun_stats",
+                value="🎲 View interesting statistics and trivia about the realm\n*Example: `/fun_stats`*",
                 inline=False
             )
             embed.add_field(
@@ -1651,6 +1939,50 @@ async def delete_match(interaction: discord.Interaction, match_id: str):
     team1_data["match_history"] = [m for m in team1_data["match_history"] if m.get("match_id") != match_id]
     team2_data["match_history"] = [m for m in team2_data["match_history"] if m.get("match_id") != match_id]
     
+    # Recalculate streaks from scratch for both teams
+    def recalculate_streak(squad_name):
+        """Recalculate current streak from match history"""
+        history = squad_data["squads"][squad_name].get("match_history", [])
+        if not history:
+            return {"type": "none", "count": 0}
+        
+        # Get results in chronological order
+        results = []
+        for match in history:
+            if match["team1"] == squad_name:
+                s1, s2 = map(int, match["score"].split('-'))
+                if s1 > s2:
+                    results.append("win")
+                elif s1 < s2:
+                    results.append("loss")
+                else:
+                    results.append("draw")
+            else:
+                s1, s2 = map(int, match["score"].split('-'))
+                if s2 > s1:
+                    results.append("win")
+                elif s2 < s1:
+                    results.append("loss")
+                else:
+                    results.append("draw")
+        
+        # Count current streak from most recent
+        if not results:
+            return {"type": "none", "count": 0}
+        
+        current_type = results[-1]
+        count = 1
+        for i in range(len(results) - 2, -1, -1):
+            if results[i] == current_type:
+                count += 1
+            else:
+                break
+        
+        return {"type": current_type, "count": count}
+    
+    team1_data["current_streak"] = recalculate_streak(team1)
+    team2_data["current_streak"] = recalculate_streak(team2)
+    
     save_data(squad_data)
     
     embed = discord.Embed(
@@ -1713,6 +2045,174 @@ async def recent_matches(interaction: discord.Interaction, limit: int = 10):
     embed.set_footer(text="Use /delete_match <match_id> to remove a match")
     
     await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="rivalry", description="⚔️ View head-to-head stats between two kingdoms")
+async def rivalry_command(interaction: discord.Interaction, squad1: str, squad2: str):
+    """Show rivalry stats between two squads"""
+    if squad1 not in SQUADS or squad2 not in SQUADS:
+        await interaction.response.send_message(
+            "❌ One or both kingdom names are invalid. Use exact squad names.",
+            ephemeral=True
+        )
+        return
+    
+    if squad1 == squad2:
+        await interaction.response.send_message("❌ A kingdom cannot rival itself!", ephemeral=True)
+        return
+    
+    h2h = get_head_to_head(squad1, squad2)
+    
+    if h2h["total"] == 0:
+        await interaction.response.send_message(
+            f"⚔️ **{squad1}** and **{squad2}** have not yet clashed in battle!",
+            ephemeral=True
+        )
+        return
+    
+    # Determine dominant squad
+    if h2h["squad1_wins"] > h2h["squad2_wins"]:
+        dominant = squad1
+        dominant_wins = h2h["squad1_wins"]
+    elif h2h["squad2_wins"] > h2h["squad1_wins"]:
+        dominant = squad2
+        dominant_wins = h2h["squad2_wins"]
+    else:
+        dominant = None
+    
+    embed = discord.Embed(
+        title="⚔️ Kingdom Rivalry",
+        description=f"**{SQUADS[squad1]} {squad1}** vs **{SQUADS[squad2]} {squad2}**",
+        color=ROYAL_RED
+    )
+    
+    embed.add_field(
+        name="📊 Head-to-Head Record",
+        value=f"Total Battles: **{h2h['total']}**\n\n"
+              f"🏆 {squad1}: **{h2h['squad1_wins']}** wins\n"
+              f"🏆 {squad2}: **{h2h['squad2_wins']}** wins\n"
+              f"🤝 Draws: **{h2h['draws']}**",
+        inline=False
+    )
+    
+    if dominant:
+        dominance = (dominant_wins / h2h["total"]) * 100
+        embed.add_field(
+            name="👑 Dominant Kingdom",
+            value=f"**{dominant}** leads the rivalry with **{dominance:.1f}%** dominance!",
+            inline=False
+        )
+    else:
+        embed.add_field(
+            name="⚖️ Perfect Balance",
+            value="The rivalry stands perfectly balanced! Both kingdoms are equally matched.",
+            inline=False
+        )
+    
+    embed.set_footer(text="⚜️ May the best kingdom prevail!")
+    
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="fun_stats", description="🎲 View fun statistics and trivia about the realm")
+async def fun_stats_command(interaction: discord.Interaction):
+    """Show interesting statistics and trivia"""
+    
+    # Calculate fun stats
+    total_matches = len(squad_data["matches"])
+    total_points = sum(s["points"] for s in squad_data["squads"].values())
+    total_wins = sum(s["wins"] for s in squad_data["squads"].values())
+    total_draws = sum(s["draws"] for s in squad_data["squads"].values())
+    
+    # Find squads with longest streaks
+    longest_win_streak_squad = None
+    longest_win_streak = 0
+    for squad_name, data in squad_data["squads"].items():
+        if data.get("biggest_win_streak", 0) > longest_win_streak:
+            longest_win_streak = data.get("biggest_win_streak", 0)
+            longest_win_streak_squad = squad_name
+    
+    # Find most active squad
+    most_active_squad = None
+    most_matches = 0
+    for squad_name, data in squad_data["squads"].items():
+        matches = data["wins"] + data["draws"] + data["losses"]
+        if matches > most_matches:
+            most_matches = matches
+            most_active_squad = squad_name
+    
+    # Find squad with most achievements
+    most_achievements_squad = None
+    most_achievements = 0
+    for squad_name, data in squad_data["squads"].items():
+        ach_count = len(data.get("achievements", []))
+        if ach_count > most_achievements:
+            most_achievements = ach_count
+            most_achievements_squad = squad_name
+    
+    # Get current top 3
+    rankings = get_squad_ranking()[:3]
+    
+    embed = discord.Embed(
+        title="🎲 Royal Realm Statistics & Trivia",
+        description="⚜️ *Fascinating facts from the kingdom chronicles!*",
+        color=ROYAL_GOLD
+    )
+    
+    embed.add_field(
+        name="📊 Global Stats",
+        value=f"⚔️ Total Battles Fought: **{total_matches}**\n"
+              f"💎 Total Glory Points: **{total_points}**\n"
+              f"🏆 Total Victories: **{total_wins}**\n"
+              f"🤝 Total Draws: **{total_draws}**",
+        inline=False
+    )
+    
+    if longest_win_streak_squad and longest_win_streak > 0:
+        embed.add_field(
+            name="🔥 Longest Win Streak",
+            value=f"**{longest_win_streak_squad}** with **{longest_win_streak}** consecutive victories!",
+            inline=False
+        )
+    
+    if most_active_squad and most_matches > 0:
+        embed.add_field(
+            name="⚔️ Most Battle-Hardened",
+            value=f"**{most_active_squad}** has fought in **{most_matches}** battles!",
+            inline=False
+        )
+    
+    if most_achievements_squad and most_achievements > 0:
+        embed.add_field(
+            name="🏅 Achievement Master",
+            value=f"**{most_achievements_squad}** has unlocked **{most_achievements}** achievements!",
+            inline=False
+        )
+    
+    if rankings:
+        podium = ""
+        for i, squad in enumerate(rankings, 1):
+            medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉"
+            podium += f"{medal} **{squad['name']}** ({squad['points']} pts)\n"
+        embed.add_field(name="👑 Current Top 3", value=podium, inline=False)
+    
+    # Random fun fact
+    import random
+    fun_facts = [
+        f"🎯 The realm has witnessed **{total_matches}** epic battles!",
+        f"💎 Warriors have accumulated **{total_points}** glory points total!",
+        f"🌟 On average, each kingdom has **{total_points // len(SQUADS):.1f}** points!",
+        f"⚔️ **{(total_draws / total_matches * 100):.1f}%** of battles end in honorable draws!" if total_matches > 0 else "⚔️ The first battles are yet to be fought!",
+        f"🏰 **{len(SQUADS)}** noble kingdoms vie for supremacy!",
+    ]
+    
+    embed.add_field(
+        name="💡 Did You Know?",
+        value=random.choice(fun_facts),
+        inline=False
+    )
+    
+    embed.set_footer(text="⚜️ History is written by the victorious!")
+    
+    await interaction.response.send_message(embed=embed)
 
 # -------------------- RUN --------------------
 bot.run(os.getenv("DISCORD_TOKEN"))
