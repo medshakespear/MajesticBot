@@ -23,6 +23,7 @@ DATA_FILE = "squad_data.json"
 ROYAL_PURPLE = 0x6a0dad
 ROYAL_GOLD = 0xffd700
 ROYAL_BLUE = 0x4169e1
+ROYAL_RED = 0xdc143c
 
 SQUADS = {
     "Manschaft": "V",
@@ -230,7 +231,39 @@ def get_squad_rank(squad_name):
             return squad["rank"]
     return None
 
-# -------------------- MODALS (Only for Logo and Match Results) --------------------
+def get_player_stats(player_id):
+    """Get comprehensive player statistics"""
+    player_key = str(player_id)
+    player_data = squad_data["players"].get(player_key)
+    
+    if not player_data:
+        return None
+    
+    # Count matches the player participated in
+    matches_played = 0
+    wins = 0
+    losses = 0
+    draws = 0
+    
+    squad_name = player_data.get("squad")
+    if squad_name and squad_name in squad_data["squads"]:
+        squad_info = squad_data["squads"][squad_name]
+        # For now, we'll use squad stats as proxy
+        # In future, you could track individual player match participation
+        matches_played = squad_info["wins"] + squad_info["losses"] + squad_info["draws"]
+        wins = squad_info["wins"]
+        losses = squad_info["losses"]
+        draws = squad_info["draws"]
+    
+    return {
+        "matches_played": matches_played,
+        "wins": wins,
+        "losses": losses,
+        "draws": draws,
+        "win_rate": (wins / matches_played * 100) if matches_played > 0 else 0
+    }
+
+# -------------------- MODALS --------------------
 class PlayerSetupModal(Modal, title="🎭 Noble Profile Setup"):
     ingame_name = TextInput(
         label="In-Game Name",
@@ -500,13 +533,14 @@ async def show_squad_info(interaction, squad_role, squad_name, tag, public=False
     wins = squad_info.get('wins', 0)
     draws = squad_info.get('draws', 0)
     losses = squad_info.get('losses', 0)
+    total_battles = wins + draws + losses
     embed.add_field(
         name="⚔️ Battle Record",
-        value=f"🏆 {wins} Victories • ⚔️ {draws} Draws • 💀 {losses} Defeats",
+        value=f"🏆 {wins} Victories • ⚔️ {draws} Draws • 💀 {losses} Defeats\n📊 Total Battles: {total_battles}",
         inline=False
     )
     
-    # Championships
+    # Championships and Titles
     champ_wins = squad_info.get('championship_wins', 0)
     titles = squad_info.get('titles', [])
     if champ_wins > 0 or titles:
@@ -514,8 +548,8 @@ async def show_squad_info(interaction, squad_role, squad_name, tag, public=False
         if champ_wins > 0:
             honor_text += f"🏆 {champ_wins} Championship{'s' if champ_wins != 1 else ''}\n"
         if titles:
-            honor_text += f"📜 {', '.join(titles)}"
-        embed.add_field(name="🎖️ Honors & Titles", value=honor_text or "None", inline=False)
+            honor_text += f"📜 " + "\n📜 ".join(titles)
+        embed.add_field(name="🎖️ Honors & Titles", value=honor_text, inline=False)
     
     # Main Roster and Subs
     main_roster = squad_info.get('main_roster', [])
@@ -587,6 +621,103 @@ async def show_squad_info(interaction, squad_role, squad_name, tag, public=False
     
     await interaction.response.send_message(embed=embed, ephemeral=not public)
 
+async def show_player_profile(interaction, member: discord.Member, public=False):
+    """Display comprehensive player profile"""
+    player_key = str(member.id)
+    player_data = squad_data["players"].get(player_key)
+    
+    if not player_data:
+        await interaction.response.send_message(
+            f"❌ {member.mention} has not established their warrior profile yet.",
+            ephemeral=True
+        )
+        return
+    
+    # Get squad info
+    squad_name = player_data.get("squad")
+    squad_role = None
+    squad_tag = "?"
+    
+    if squad_name and squad_name in SQUADS:
+        squad_tag = SQUADS[squad_name]
+        squad_role = discord.utils.get(interaction.guild.roles, name=squad_name)
+    
+    # Get player stats
+    stats = get_player_stats(member.id)
+    
+    # Determine roster status
+    roster_status = "⚔️ Kingdom Warrior"
+    if squad_name and squad_name in squad_data["squads"]:
+        squad_info = squad_data["squads"][squad_name]
+        if member.id in squad_info.get("main_roster", []):
+            roster_status = "⭐ Elite Warrior (Main Roster)"
+        elif member.id in squad_info.get("subs", []):
+            roster_status = "🔄 Reserve Warrior (Substitute)"
+    
+    embed = discord.Embed(
+        title=f"🎭 Warrior Profile: {player_data.get('ingame_name', 'Unknown')}",
+        description=f"⚜️ *{member.mention}'s noble chronicle*",
+        color=squad_role.color if squad_role else ROYAL_BLUE
+    )
+    
+    # Basic Info
+    embed.add_field(
+        name="⚔️ In-Game Identity",
+        value=f"**IGN:** {player_data.get('ingame_name', 'Unknown')}\n**ID:** #{player_data.get('ingame_id', 'N/A')}",
+        inline=True
+    )
+    
+    role = player_data.get('role', 'Unknown')
+    role_emoji = ROLE_EMOJIS.get(role, '⚔️')
+    embed.add_field(
+        name="💼 Battle Position",
+        value=f"{role_emoji} **{role}**",
+        inline=True
+    )
+    
+    embed.add_field(
+        name="🏆 Peak Achievement",
+        value=player_data.get('highest_rank', 'Unranked'),
+        inline=True
+    )
+    
+    # Kingdom affiliation
+    if squad_name:
+        embed.add_field(
+            name="🏰 Kingdom Allegiance",
+            value=f"{squad_tag} **{squad_name}**\n{roster_status}",
+            inline=False
+        )
+    
+    # Statistics (if available)
+    if stats:
+        win_rate = stats['win_rate']
+        embed.add_field(
+            name="📊 Battle Statistics",
+            value=(
+                f"⚔️ Battles: {stats['matches_played']}\n"
+                f"🏆 Victories: {stats['wins']}\n"
+                f"⚔️ Draws: {stats['draws']}\n"
+                f"💀 Defeats: {stats['losses']}\n"
+                f"📈 Win Rate: {win_rate:.1f}%"
+            ),
+            inline=False
+        )
+    
+    # Leadership status
+    if is_leader(member):
+        embed.add_field(
+            name="👑 Royal Status",
+            value="**LEADER** - Noble commander of the kingdom",
+            inline=False
+        )
+    
+    # Set member avatar as thumbnail
+    embed.set_thumbnail(url=member.display_avatar.url)
+    embed.set_footer(text="⚜️ Glory to the warrior")
+    
+    await interaction.response.send_message(embed=embed, ephemeral=not public)
+
 class HelpCategoryView(View):
     def __init__(self):
         super().__init__(timeout=180)
@@ -632,6 +763,11 @@ class HelpCategoryView(View):
             embed.add_field(
                 name="/members",
                 value="📖 Open the member panel to browse squads, view rankings, setup your profile, and manage your squad membership\n*Example: `/members`*",
+                inline=False
+            )
+            embed.add_field(
+                name="/profile @user (optional)",
+                value="🎭 View a warrior's profile publicly. Leave blank to view your own.\n*Example: `/profile` or `/profile @JohnDoe`*",
                 inline=False
             )
             embed.add_field(
@@ -698,6 +834,16 @@ class HelpCategoryView(View):
                 value="📖 Open the moderator panel to add match results\n*Example: `/moderator`*",
                 inline=False
             )
+            embed.add_field(
+                name="/add_title squad_name title position",
+                value="🏆 Award a title to a kingdom (position: 1st, 2nd, 3rd, etc.)\n*Example: `/add_title ROYALS Champion 1st`*",
+                inline=False
+            )
+            embed.add_field(
+                name="/set_squad_logo squad_name logo_url",
+                value="🖼️ Set the royal emblem for any kingdom\n*Example: `/set_squad_logo ROYALS https://i.imgur.com/example.png`*",
+                inline=False
+            )
         
         embed.set_footer(text="⚜️ Royal Command Archives")
         await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -747,7 +893,11 @@ class MemberPanelView(View):
         
         await show_squad_info(interaction, role, role.name, tag, public=False)
     
-    @discord.ui.button(label="Setup Profile", style=discord.ButtonStyle.success, emoji="🎭", row=1)
+    @discord.ui.button(label="My Profile", style=discord.ButtonStyle.success, emoji="🎭", row=1)
+    async def my_profile_button(self, interaction: discord.Interaction, button: Button):
+        await show_player_profile(interaction, interaction.user, public=True)
+    
+    @discord.ui.button(label="Setup Profile", style=discord.ButtonStyle.primary, emoji="⚙️", row=2)
     async def setup_profile_button(self, interaction: discord.Interaction, button: Button):
         role, _ = get_member_squad(interaction.user, interaction.guild)
         if not role:
@@ -848,7 +998,8 @@ async def members_panel(interaction: discord.Interaction):
             "🏰 Browse all kingdoms\n"
             "🏆 View royal leaderboard\n"
             "🛡️ View your kingdom\n"
-            "🎭 Setup your warrior profile\n"
+            "🎭 View your profile publicly\n"
+            "⚙️ Setup your warrior profile\n"
             "🚪 Depart from your kingdom"
         ),
         inline=False
@@ -856,6 +1007,11 @@ async def members_panel(interaction: discord.Interaction):
     embed.set_footer(text="⚜️ May honor guide your path")
     
     await interaction.response.send_message(embed=embed, view=view)
+
+@bot.tree.command(name="profile", description="🎭 View a warrior's profile (leave blank for your own)")
+async def profile_command(interaction: discord.Interaction, member: Optional[discord.Member] = None):
+    target = member or interaction.user
+    await show_player_profile(interaction, target, public=True)
 
 @bot.tree.command(name="help", description="📜 View all available commands and their usage")
 async def help_command(interaction: discord.Interaction):
@@ -1207,13 +1363,109 @@ async def moderator_panel(interaction: discord.Interaction):
         color=ROYAL_PURPLE
     )
     embed.add_field(
-        name="📜 Available Actions",
-        value="⚔️ Record battle results\n📊 (More features coming soon)",
+        name="📜 Available Commands",
+        value=(
+            "⚔️ Record battle results (use button above)\n"
+            "`/add_title squad_name title position` - Award titles\n"
+            "`/set_squad_logo squad_name url` - Set kingdom emblems"
+        ),
         inline=False
     )
     embed.set_footer(text="⚜️ Govern with fairness and strength")
     
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+@bot.tree.command(name="add_title", description="🏆 Award a championship title to a kingdom")
+async def add_title(
+    interaction: discord.Interaction,
+    squad_name: str,
+    title: str,
+    position: str
+):
+    if not is_moderator(interaction.user):
+        await interaction.response.send_message("❌ Only royal moderators may award titles.", ephemeral=True)
+        return
+    
+    if squad_name not in SQUADS:
+        await interaction.response.send_message(
+            f"❌ Kingdom `{squad_name}` not found. Use exact squad name.",
+            ephemeral=True
+        )
+        return
+    
+    squad_info = squad_data["squads"][squad_name]
+    
+    # Format the title with position
+    full_title = f"{title} ({position} Place)"
+    
+    # Add title to list
+    if "titles" not in squad_info:
+        squad_info["titles"] = []
+    
+    squad_info["titles"].append(full_title)
+    
+    # Increment championship wins for 1st place
+    if position.lower() in ["1st", "first", "1"]:
+        squad_info["championship_wins"] = squad_info.get("championship_wins", 0) + 1
+    
+    save_data(squad_data)
+    
+    # Determine emoji based on position
+    position_emoji = "🥇" if position.lower() in ["1st", "first", "1"] else "🥈" if position.lower() in ["2nd", "second", "2"] else "🥉"
+    
+    embed = discord.Embed(
+        title="🏆 Royal Title Bestowed",
+        description=f"{position_emoji} **{squad_name}** has been awarded the title:\n\n**{full_title}**",
+        color=ROYAL_GOLD
+    )
+    
+    if position.lower() in ["1st", "first", "1"]:
+        embed.add_field(
+            name="👑 Championship Glory",
+            value=f"Total Championships: **{squad_info['championship_wins']}**",
+            inline=False
+        )
+    
+    await interaction.response.send_message(embed=embed)
+    await log_action(
+        interaction.guild,
+        "🏆 Title Awarded",
+        f"{interaction.user.mention} awarded **{squad_name}** the title: {full_title}"
+    )
+
+@bot.tree.command(name="set_squad_logo", description="🖼️ Set the royal emblem for any kingdom")
+async def set_squad_logo(
+    interaction: discord.Interaction,
+    squad_name: str,
+    logo_url: str
+):
+    if not is_moderator(interaction.user):
+        await interaction.response.send_message("❌ Only royal moderators may set kingdom emblems.", ephemeral=True)
+        return
+    
+    if squad_name not in SQUADS:
+        await interaction.response.send_message(
+            f"❌ Kingdom `{squad_name}` not found. Use exact squad name.",
+            ephemeral=True
+        )
+        return
+    
+    squad_data["squads"][squad_name]["logo_url"] = logo_url
+    save_data(squad_data)
+    
+    embed = discord.Embed(
+        title="✅ Royal Emblem Established",
+        description=f"The crest of **{squad_name}** has been emblazoned!",
+        color=ROYAL_GOLD
+    )
+    embed.set_thumbnail(url=logo_url)
+    
+    await interaction.response.send_message(embed=embed)
+    await log_action(
+        interaction.guild,
+        "🖼️ Emblem Set",
+        f"{interaction.user.mention} set the royal emblem for **{squad_name}**"
+    )
 
 # -------------------- RUN --------------------
 bot.run(os.getenv("DISCORD_TOKEN"))
