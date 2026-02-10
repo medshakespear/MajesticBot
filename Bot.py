@@ -7,6 +7,7 @@ import os
 import json
 from datetime import datetime
 from typing import Optional
+import uuid
 
 # -------------------- INTENTS --------------------
 intents = discord.Intents.default()
@@ -202,17 +203,29 @@ async def safe_nick_update(member, role, tag):
     except:
         pass
 
+def update_player_squad(player_id, new_squad=None):
+    """Update player's squad in their profile"""
+    player_key = str(player_id)
+    if player_key in squad_data["players"]:
+        squad_data["players"][player_key]["squad"] = new_squad
+        save_data(squad_data)
+
 def get_squad_ranking():
-    """Get squads sorted by points with ranking position"""
+    """Get squads sorted by points with ranking position and win rate"""
     rankings = []
     for squad_name, data in squad_data["squads"].items():
+        total_matches = data["wins"] + data["draws"] + data["losses"]
+        win_rate = (data["wins"] / total_matches * 100) if total_matches > 0 else 0.0
+        
         rankings.append({
             "name": squad_name,
             "tag": SQUADS[squad_name],
             "points": data["points"],
             "wins": data["wins"],
             "draws": data["draws"],
-            "losses": data["losses"]
+            "losses": data["losses"],
+            "win_rate": win_rate,
+            "total_matches": total_matches
         })
     
     sorted_rankings = sorted(rankings, key=lambda x: x["points"], reverse=True)
@@ -248,8 +261,6 @@ def get_player_stats(player_id):
     squad_name = player_data.get("squad")
     if squad_name and squad_name in squad_data["squads"]:
         squad_info = squad_data["squads"][squad_name]
-        # For now, we'll use squad stats as proxy
-        # In future, you could track individual player match participation
         matches_played = squad_info["wins"] + squad_info["losses"] + squad_info["draws"]
         wins = squad_info["wins"]
         losses = squad_info["losses"]
@@ -262,6 +273,13 @@ def get_player_stats(player_id):
         "draws": draws,
         "win_rate": (wins / matches_played * 100) if matches_played > 0 else 0
     }
+
+def find_match_by_id(match_id):
+    """Find a match by its ID"""
+    for i, match in enumerate(squad_data["matches"]):
+        if match.get("match_id") == match_id:
+            return i, match
+    return None, None
 
 # -------------------- MODALS --------------------
 class PlayerSetupModal(Modal, title="🎭 Noble Profile Setup"):
@@ -378,7 +396,11 @@ class AddMatchModal(Modal, title="⚔️ Record Battle Result"):
             team2_data["points"] += 1
             result_text = f"⚔️ **{self.team1.value}** and **{self.team2.value}** fought to an honorable stalemate!"
         
+        # Generate unique match ID
+        match_id = str(uuid.uuid4())[:8]
+        
         match_data = {
+            "match_id": match_id,
             "team1": self.team1.value,
             "team2": self.team2.value,
             "score": self.result.value,
@@ -397,6 +419,7 @@ class AddMatchModal(Modal, title="⚔️ Record Battle Result"):
             description=result_text,
             color=ROYAL_GOLD
         )
+        embed.add_field(name="🆔 Match ID", value=f"`{match_id}`", inline=False)
         embed.add_field(name="⚔️ Score", value=f"**{self.result.value}**", inline=True)
         embed.add_field(
             name=f"{SQUADS[self.team1.value]} {self.team1.value}",
@@ -408,12 +431,13 @@ class AddMatchModal(Modal, title="⚔️ Record Battle Result"):
             value=f"💎 {team2_data['points']} points | 🏆 {team2_data['wins']}W ⚔️ {team2_data['draws']}D 💀 {team2_data['losses']}L",
             inline=False
         )
+        embed.set_footer(text=f"Match ID: {match_id} (save this to delete if needed)")
         
         await interaction.response.send_message(embed=embed)
         await log_action(
             interaction.guild,
             "📜 Battle Recorded",
-            f"{interaction.user.mention} recorded: {self.team1.value} vs {self.team2.value} ({self.result.value})"
+            f"{interaction.user.mention} recorded: {self.team1.value} vs {self.team2.value} ({self.result.value}) | ID: {match_id}"
         )
 
 class SetLogoModal(Modal, title="🖼️ Set Royal Emblem"):
@@ -514,9 +538,15 @@ async def show_squad_info(interaction, squad_role, squad_name, tag, public=False
     """Enhanced squad information display with royal theme"""
     squad_info = squad_data["squads"].get(squad_name, {})
     
-    # Get ranking position
+    # Get ranking position and win rate
     rank = get_squad_rank(squad_name)
     rank_emoji = "🥇" if rank == 1 else "🥈" if rank == 2 else "🥉" if rank == 3 else "🏅"
+    
+    wins = squad_info.get('wins', 0)
+    draws = squad_info.get('draws', 0)
+    losses = squad_info.get('losses', 0)
+    total_battles = wins + draws + losses
+    win_rate = (wins / total_battles * 100) if total_battles > 0 else 0.0
     
     embed = discord.Embed(
         title=f"🏰 Kingdom of {squad_name}",
@@ -529,14 +559,10 @@ async def show_squad_info(interaction, squad_role, squad_name, tag, public=False
     embed.add_field(name="💎 Glory Points", value=f"**{squad_info.get('points', 0)}**", inline=True)
     embed.add_field(name=f"{rank_emoji} Ranking", value=f"**#{rank}**" if rank else "Unranked", inline=True)
     
-    # Record
-    wins = squad_info.get('wins', 0)
-    draws = squad_info.get('draws', 0)
-    losses = squad_info.get('losses', 0)
-    total_battles = wins + draws + losses
+    # Record with win rate
     embed.add_field(
         name="⚔️ Battle Record",
-        value=f"🏆 {wins} Victories • ⚔️ {draws} Draws • 💀 {losses} Defeats\n📊 Total Battles: {total_battles}",
+        value=f"🏆 {wins}W • ⚔️ {draws}D • 💀 {losses}L\n📊 Total: {total_battles} | Win Rate: **{win_rate:.1f}%**",
         inline=False
     )
     
@@ -803,8 +829,18 @@ class HelpCategoryView(View):
                 inline=False
             )
             embed.add_field(
+                name="/remove_main @user",
+                value="⭐ Remove a warrior from the main roster\n*Example: `/remove_main @JohnDoe`*",
+                inline=False
+            )
+            embed.add_field(
                 name="/set_sub @user",
                 value="🔄 Add a warrior to the reserve substitutes (max 3)\n*Example: `/set_sub @JohnDoe`*",
+                inline=False
+            )
+            embed.add_field(
+                name="/remove_sub @user",
+                value="🔄 Remove a warrior from substitutes\n*Example: `/remove_sub @JohnDoe`*",
                 inline=False
             )
             embed.add_field(
@@ -844,6 +880,16 @@ class HelpCategoryView(View):
                 value="🖼️ Set the royal emblem for any kingdom\n*Example: `/set_squad_logo ROYALS https://i.imgur.com/example.png`*",
                 inline=False
             )
+            embed.add_field(
+                name="/delete_match match_id",
+                value="🗑️ Delete a match result (get match ID from match recording)\n*Example: `/delete_match a1b2c3d4`*",
+                inline=False
+            )
+            embed.add_field(
+                name="/recent_matches limit",
+                value="📜 View recent match results with IDs\n*Example: `/recent_matches 10`*",
+                inline=False
+            )
         
         embed.set_footer(text="⚜️ Royal Command Archives")
         await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -877,7 +923,7 @@ class MemberPanelView(View):
             medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"🏅 **{i}.**"
             embed.add_field(
                 name=f"{medal} {squad['tag']} {squad['name']}",
-                value=f"💎 **{squad['points']}** points | 🏆 {squad['wins']}W • ⚔️ {squad['draws']}D • 💀 {squad['losses']}L",
+                value=f"💎 **{squad['points']}** pts | 🏆 {squad['wins']}W-{squad['draws']}D-{squad['losses']}L | 📊 WR: **{squad['win_rate']:.1f}%**",
                 inline=False
             )
         
@@ -918,6 +964,9 @@ class MemberPanelView(View):
         if not role:
             await interaction.response.send_message("❌ You are not sworn to any kingdom.", ephemeral=True)
             return
+        
+        # Update player profile - remove squad affiliation
+        update_player_squad(interaction.user.id, None)
         
         await interaction.user.remove_roles(role)
         await safe_nick_update(interaction.user, None, None)
@@ -982,7 +1031,7 @@ async def safety_sync():
 
 # -------------------- SLASH COMMANDS --------------------
 
-# MEMBER COMMANDS (No squad requirement)
+# MEMBER COMMANDS
 @bot.tree.command(name="members", description="👥 Access member panel - Browse kingdoms, rankings, and manage your profile")
 async def members_panel(interaction: discord.Interaction):
     view = MemberPanelView()
@@ -1041,7 +1090,7 @@ async def help_command(interaction: discord.Interaction):
     
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-# LEADER COMMANDS (Using @mentions instead of modals)
+# LEADER COMMANDS
 @bot.tree.command(name="leader", description="👑 Open leader panel to manage your kingdom")
 async def leader_panel(interaction: discord.Interaction):
     if not is_leader(interaction.user):
@@ -1069,7 +1118,9 @@ async def leader_panel(interaction: discord.Interaction):
             "`/add_member @user` - Recruit a warrior\n"
             "`/remove_member @user` - Remove a warrior\n"
             "`/set_main @user` - Add to elite roster\n"
+            "`/remove_main @user` - Remove from elite roster\n"
             "`/set_sub @user` - Add to reserves\n"
+            "`/remove_sub @user` - Remove from reserves\n"
             "`/promote_leader @user` - Bestow leadership\n"
             "`/give_guest @user` - Grant guest privileges\n"
             "`/remove_guest @user` - Revoke guest privileges\n"
@@ -1101,6 +1152,9 @@ async def add_member(interaction: discord.Interaction, member: discord.Member):
     await member.add_roles(squad_role)
     await safe_nick_update(member, squad_role, tag)
     
+    # Update player profile squad
+    update_player_squad(member.id, squad_role.name)
+    
     embed = discord.Embed(
         title="✅ Warrior Recruited",
         description=f"⚜️ {member.mention} has sworn allegiance to **{squad_role.name}**!",
@@ -1127,6 +1181,17 @@ async def remove_member(interaction: discord.Interaction, member: discord.Member
     if squad_role not in member.roles:
         await interaction.response.send_message("❌ This warrior is not sworn to your kingdom.", ephemeral=True)
         return
+    
+    # Remove from rosters
+    squad_info = squad_data["squads"][squad_role.name]
+    if member.id in squad_info.get("main_roster", []):
+        squad_info["main_roster"].remove(member.id)
+    if member.id in squad_info.get("subs", []):
+        squad_info["subs"].remove(member.id)
+    save_data(squad_data)
+    
+    # Update player profile
+    update_player_squad(member.id, None)
     
     await member.remove_roles(squad_role)
     clean = remove_all_tags(member.display_name)
@@ -1191,6 +1256,38 @@ async def set_main(interaction: discord.Interaction, member: discord.Member):
         f"{interaction.user.mention} added {member.mention} to main roster of **{squad_role.name}**"
     )
 
+@bot.tree.command(name="remove_main", description="⭐ Remove a warrior from the main roster")
+async def remove_main(interaction: discord.Interaction, member: discord.Member):
+    if not is_leader(interaction.user):
+        await interaction.response.send_message("❌ Only royal leaders may manage the elite roster.", ephemeral=True)
+        return
+    
+    squad_role, tag = get_member_squad(interaction.user, interaction.guild)
+    if not squad_role:
+        await interaction.response.send_message("❌ You must be sworn to a kingdom.", ephemeral=True)
+        return
+    
+    squad_info = squad_data["squads"][squad_role.name]
+    
+    if member.id not in squad_info["main_roster"]:
+        await interaction.response.send_message("❌ This warrior is not in the main roster.", ephemeral=True)
+        return
+    
+    squad_info["main_roster"].remove(member.id)
+    save_data(squad_data)
+    
+    embed = discord.Embed(
+        title="⭐ Removed from Elite Roster",
+        description=f"⚜️ {member.mention} has been removed from the main roster.",
+        color=ROYAL_BLUE
+    )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await log_action(
+        interaction.guild,
+        "⭐ Main Roster Updated",
+        f"{interaction.user.mention} removed {member.mention} from main roster of **{squad_role.name}**"
+    )
+
 @bot.tree.command(name="set_sub", description="🔄 Add a warrior to the reserve substitutes")
 async def set_sub(interaction: discord.Interaction, member: discord.Member):
     if not is_leader(interaction.user):
@@ -1233,6 +1330,38 @@ async def set_sub(interaction: discord.Interaction, member: discord.Member):
         interaction.guild,
         "🔄 Reserve Warrior Added",
         f"{interaction.user.mention} added {member.mention} to substitutes of **{squad_role.name}**"
+    )
+
+@bot.tree.command(name="remove_sub", description="🔄 Remove a warrior from the substitutes")
+async def remove_sub(interaction: discord.Interaction, member: discord.Member):
+    if not is_leader(interaction.user):
+        await interaction.response.send_message("❌ Only royal leaders may manage reserves.", ephemeral=True)
+        return
+    
+    squad_role, tag = get_member_squad(interaction.user, interaction.guild)
+    if not squad_role:
+        await interaction.response.send_message("❌ You must be sworn to a kingdom.", ephemeral=True)
+        return
+    
+    squad_info = squad_data["squads"][squad_role.name]
+    
+    if member.id not in squad_info["subs"]:
+        await interaction.response.send_message("❌ This warrior is not in the substitutes.", ephemeral=True)
+        return
+    
+    squad_info["subs"].remove(member.id)
+    save_data(squad_data)
+    
+    embed = discord.Embed(
+        title="🔄 Removed from Reserves",
+        description=f"⚜️ {member.mention} has been removed from the substitutes.",
+        color=ROYAL_BLUE
+    )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await log_action(
+        interaction.guild,
+        "🔄 Substitutes Updated",
+        f"{interaction.user.mention} removed {member.mention} from substitutes of **{squad_role.name}**"
     )
 
 @bot.tree.command(name="promote_leader", description="👑 Bestow leadership upon a worthy warrior")
@@ -1367,7 +1496,9 @@ async def moderator_panel(interaction: discord.Interaction):
         value=(
             "⚔️ Record battle results (use button above)\n"
             "`/add_title squad_name title position` - Award titles\n"
-            "`/set_squad_logo squad_name url` - Set kingdom emblems"
+            "`/set_squad_logo squad_name url` - Set kingdom emblems\n"
+            "`/delete_match match_id` - Delete a match result\n"
+            "`/recent_matches limit` - View recent matches with IDs"
         ),
         inline=False
     )
@@ -1466,6 +1597,116 @@ async def set_squad_logo(
         "🖼️ Emblem Set",
         f"{interaction.user.mention} set the royal emblem for **{squad_name}**"
     )
+
+@bot.tree.command(name="delete_match", description="🗑️ Delete a match result by ID")
+async def delete_match(interaction: discord.Interaction, match_id: str):
+    if not is_moderator(interaction.user):
+        await interaction.response.send_message("❌ Only royal moderators may delete matches.", ephemeral=True)
+        return
+    
+    index, match = find_match_by_id(match_id)
+    
+    if match is None:
+        await interaction.response.send_message(f"❌ Match with ID `{match_id}` not found.", ephemeral=True)
+        return
+    
+    team1 = match["team1"]
+    team2 = match["team2"]
+    score = match["score"]
+    
+    try:
+        score1, score2 = map(int, score.split('-'))
+    except:
+        await interaction.response.send_message("❌ Invalid match data.", ephemeral=True)
+        return
+    
+    # Reverse the match results
+    team1_data = squad_data["squads"][team1]
+    team2_data = squad_data["squads"][team2]
+    
+    if score1 > score2:
+        team1_data["wins"] -= 1
+        team1_data["points"] -= 2
+        team2_data["losses"] -= 1
+    elif score2 > score1:
+        team2_data["wins"] -= 1
+        team2_data["points"] -= 2
+        team1_data["losses"] -= 1
+    else:
+        team1_data["draws"] -= 1
+        team1_data["points"] -= 1
+        team2_data["draws"] -= 1
+        team2_data["points"] -= 1
+    
+    # Remove from main matches list
+    squad_data["matches"].pop(index)
+    
+    # Remove from team match histories
+    team1_data["match_history"] = [m for m in team1_data["match_history"] if m.get("match_id") != match_id]
+    team2_data["match_history"] = [m for m in team2_data["match_history"] if m.get("match_id") != match_id]
+    
+    save_data(squad_data)
+    
+    embed = discord.Embed(
+        title="🗑️ Match Deleted",
+        description=f"⚜️ Match between **{team1}** and **{team2}** has been erased from the chronicles.",
+        color=ROYAL_RED
+    )
+    embed.add_field(name="Match ID", value=f"`{match_id}`", inline=True)
+    embed.add_field(name="Score", value=score, inline=True)
+    embed.set_footer(text="Points and records have been adjusted")
+    
+    await interaction.response.send_message(embed=embed)
+    await log_action(
+        interaction.guild,
+        "🗑️ Match Deleted",
+        f"{interaction.user.mention} deleted match {match_id}: {team1} vs {team2} ({score})"
+    )
+
+@bot.tree.command(name="recent_matches", description="📜 View recent match results")
+async def recent_matches(interaction: discord.Interaction, limit: int = 10):
+    if not is_moderator(interaction.user):
+        await interaction.response.send_message("❌ Only royal moderators may view match records.", ephemeral=True)
+        return
+    
+    if limit < 1 or limit > 25:
+        await interaction.response.send_message("❌ Limit must be between 1 and 25.", ephemeral=True)
+        return
+    
+    recent = squad_data["matches"][-limit:][::-1]  # Last N matches, reversed
+    
+    if not recent:
+        await interaction.response.send_message("📜 No matches recorded yet.", ephemeral=True)
+        return
+    
+    embed = discord.Embed(
+        title="📜 Recent Battle Chronicles",
+        description=f"⚜️ *Last {len(recent)} recorded battles*",
+        color=ROYAL_PURPLE
+    )
+    
+    for match in recent:
+        match_id = match.get("match_id", "unknown")
+        team1 = match["team1"]
+        team2 = match["team2"]
+        score = match["score"]
+        date = match.get("date", "Unknown date")
+        
+        try:
+            dt = datetime.fromisoformat(date)
+            date_str = dt.strftime("%b %d, %Y %H:%M")
+        except:
+            date_str = "Unknown date"
+        
+        embed.add_field(
+            name=f"⚔️ {SQUADS.get(team1, '?')} vs {SQUADS.get(team2, '?')}",
+            value=f"**{team1}** {score} **{team2}**\n🆔 `{match_id}` • 📅 {date_str}",
+            inline=False
+        )
+    
+    embed.set_footer(text="Use /delete_match <match_id> to remove a match")
+    
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # -------------------- RUN --------------------
 bot.run(os.getenv("DISCORD_TOKEN"))
