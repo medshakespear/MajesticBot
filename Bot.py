@@ -282,7 +282,7 @@ def find_match_by_id(match_id):
     return None, None
 
 # -------------------- MODALS --------------------
-class PlayerSetupModal(Modal, title="🎭 Noble Profile Setup"):
+class PlayerSetupModal(Modal, title="🎭 Royal Profile Setup"):
     ingame_name = TextInput(
         label="In-Game Name",
         placeholder="Enter your IGN",
@@ -323,7 +323,7 @@ class PlayerSetupModal(Modal, title="🎭 Noble Profile Setup"):
         save_data(squad_data)
         
         embed = discord.Embed(
-            title="✅ Noble Profile Established",
+            title="✅ Royal Profile Established",
             description=f"Your warrior profile has been inscribed in the royal archives!",
             color=ROYAL_GOLD
         )
@@ -335,7 +335,7 @@ class PlayerSetupModal(Modal, title="🎭 Noble Profile Setup"):
         await interaction.response.send_message(embed=embed, ephemeral=True)
         await log_action(
             interaction.guild,
-            "🎭 Noble Profile Updated",
+            "🎭 Royal Profile Updated",
             f"{interaction.user.mention} updated their warrior profile"
         )
 
@@ -496,7 +496,7 @@ class RoleSelectView(View):
     
     async def role_selected(self, interaction: discord.Interaction):
         if interaction.user.id != self.user_id:
-            await interaction.response.send_message("❌ This is not your setup panel, noble warrior.", ephemeral=True)
+            await interaction.response.send_message("❌ This is not your setup panel, Royal warrior.", ephemeral=True)
             return
         
         selected_role = interaction.data["values"][0]
@@ -550,7 +550,7 @@ async def show_squad_info(interaction, squad_role, squad_name, tag, public=False
     
     embed = discord.Embed(
         title=f"🏰 Kingdom of {squad_name}",
-        description=f"⚜️ *A noble house in the realm of warriors*",
+        description=f"⚜️ *A Royal house in the realm of warriors*",
         color=squad_role.color if squad_role else ROYAL_PURPLE
     )
     
@@ -621,7 +621,7 @@ async def show_squad_info(interaction, squad_role, squad_name, tag, public=False
         elif squad_role:
             embed.add_field(
                 name=f"👥 Kingdom Members",
-                value=f"{len(squad_role.members)} noble warriors",
+                value=f"{len(squad_role.members)} Royal warriors",
                 inline=False
             )
     
@@ -682,7 +682,7 @@ async def show_player_profile(interaction, member: discord.Member, public=False)
     
     embed = discord.Embed(
         title=f"🎭 Warrior Profile: {player_data.get('ingame_name', 'Unknown')}",
-        description=f"⚜️ *{member.mention}'s noble chronicle*",
+        description=f"⚜️ *{member.mention}'s Royal chronicle*",
         color=squad_role.color if squad_role else ROYAL_BLUE
     )
     
@@ -708,15 +708,21 @@ async def show_player_profile(interaction, member: discord.Member, public=False)
     )
     
     # Kingdom affiliation
-    if squad_name:
+    if squad_name and squad_name != "Free Agent":
         embed.add_field(
             name="🏰 Kingdom Allegiance",
             value=f"{squad_tag} **{squad_name}**\n{roster_status}",
             inline=False
         )
+    elif squad_name == "Free Agent":
+        embed.add_field(
+            name="🏰 Kingdom Allegiance",
+            value="⚔️ **Free Agent** - Not sworn to any kingdom",
+            inline=False
+        )
     
     # Statistics (if available)
-    if stats:
+    if stats and squad_name and squad_name != "Free Agent":
         win_rate = stats['win_rate']
         embed.add_field(
             name="📊 Battle Statistics",
@@ -734,7 +740,7 @@ async def show_player_profile(interaction, member: discord.Member, public=False)
     if is_leader(member):
         embed.add_field(
             name="👑 Royal Status",
-            value="**LEADER** - Noble commander of the kingdom",
+            value="**LEADER** - Royal commander of the kingdom",
             inline=False
         )
     
@@ -783,7 +789,7 @@ class HelpCategoryView(View):
         if category == "member":
             embed = discord.Embed(
                 title="👥 Member Commands",
-                description="*Commands available to all noble warriors*",
+                description="*Commands available to all Royal warriors*",
                 color=ROYAL_BLUE
             )
             embed.add_field(
@@ -903,10 +909,10 @@ class MemberPanelView(View):
         view = SquadBrowserView(interaction.guild)
         embed = discord.Embed(
             title="🏰 Kingdom Explorer",
-            description="⚜️ Select a kingdom from the dropdown to view their noble house!",
+            description="⚜️ Select a kingdom from the dropdown to view their Royal house!",
             color=ROYAL_BLUE
         )
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        await interaction.response.send_message(embed=embed, view=view)
     
     @discord.ui.button(label="Rankings", style=discord.ButtonStyle.secondary, emoji="🏆", row=0)
     async def rankings_button(self, interaction: discord.Interaction, button: Button):
@@ -914,7 +920,7 @@ class MemberPanelView(View):
         
         embed = discord.Embed(
             title="🏆 Royal Leaderboard",
-            description="⚜️ *Current standings of the noble houses*",
+            description="⚜️ *Current standings of the Royal houses*",
             color=ROYAL_GOLD
         )
         
@@ -928,13 +934,13 @@ class MemberPanelView(View):
             )
         
         embed.set_footer(text="⚜️ Glory to the victorious!")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message(embed=embed)
     
     @discord.ui.button(label="My Kingdom", style=discord.ButtonStyle.success, emoji="🛡️", row=1)
     async def my_squad_button(self, interaction: discord.Interaction, button: Button):
         role, tag = get_member_squad(interaction.user, interaction.guild)
         if not role:
-            await interaction.response.send_message("❌ You are not sworn to any kingdom, noble warrior.", ephemeral=True)
+            await interaction.response.send_message("❌ You are not sworn to any kingdom, Royal warrior.", ephemeral=True)
             return
         
         await show_squad_info(interaction, role, role.name, tag, public=False)
@@ -945,12 +951,11 @@ class MemberPanelView(View):
     
     @discord.ui.button(label="Setup Profile", style=discord.ButtonStyle.primary, emoji="⚙️", row=2)
     async def setup_profile_button(self, interaction: discord.Interaction, button: Button):
+        # CHANGE 1: Allow all members to setup profiles, not just squad members
         role, _ = get_member_squad(interaction.user, interaction.guild)
-        if not role:
-            await interaction.response.send_message("❌ You must join a kingdom before establishing your warrior profile.", ephemeral=True)
-            return
+        squad_name = role.name if role else "Free Agent"
         
-        view = RoleSelectView(interaction.user.id, role.name)
+        view = RoleSelectView(interaction.user.id, squad_name)
         embed = discord.Embed(
             title="🎭 Warrior Profile Setup",
             description="⚜️ Select your battle position to inscribe your legacy in the royal archives.",
@@ -970,7 +975,7 @@ class MemberPanelView(View):
         
         await interaction.user.remove_roles(role)
         await safe_nick_update(interaction.user, None, None)
-        await interaction.response.send_message(f"🚪 You have departed from **{role.name}**. Farewell, noble warrior.", ephemeral=True)
+        await interaction.response.send_message(f"🚪 You have departed from **{role.name}**. Farewell, Royal warrior.", ephemeral=True)
         await log_action(
             interaction.guild,
             "🚪 Kingdom Departed",
@@ -1037,7 +1042,7 @@ async def members_panel(interaction: discord.Interaction):
     view = MemberPanelView()
     
     embed = discord.Embed(
-        title="👥 Noble Member Hall",
+        title="👥 Royal Member Hall",
         description="⚜️ *Welcome to the royal chambers, warrior. Use the buttons below to navigate.*",
         color=ROYAL_BLUE
     )
@@ -1055,6 +1060,7 @@ async def members_panel(interaction: discord.Interaction):
     )
     embed.set_footer(text="⚜️ May honor guide your path")
     
+    # CHANGE 2: Make member panel visible to everyone
     await interaction.response.send_message(embed=embed, view=view)
 
 @bot.tree.command(name="profile", description="🎭 View a warrior's profile (leave blank for your own)")
@@ -1109,7 +1115,7 @@ async def leader_panel(interaction: discord.Interaction):
     
     embed = discord.Embed(
         title=f"👑 Royal Leadership Chamber - {squad_role.name}",
-        description="⚜️ *Govern your kingdom wisely, noble leader*",
+        description="⚜️ *Govern your kingdom wisely, Royal leader*",
         color=squad_role.color if squad_role.color != discord.Color.default() else ROYAL_GOLD
     )
     embed.add_field(
