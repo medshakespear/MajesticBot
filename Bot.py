@@ -529,6 +529,43 @@ class SquadMenuView(View):
         
         await interaction.response.send_message(embed=embed, ephemeral=not self.is_public)
 
+class SquadBrowserView(View):
+    def __init__(self, guild):
+        super().__init__(timeout=180)
+        self.guild = guild
+        
+        # Create squad selection dropdown with all squads
+        options = []
+        for squad_name, tag in sorted(SQUADS.items()):
+            options.append(
+                discord.SelectOption(
+                    label=squad_name,
+                    value=squad_name,
+                    emoji=tag if len(tag) <= 2 else "🛡️",
+                    description=f"Tag: {tag}"
+                )
+            )
+        
+        # Discord has a limit of 25 options per select menu
+        select = Select(
+            placeholder="🔍 Choose a squad to view...",
+            options=options[:25],  # Take first 25
+            custom_id="squad_browser_select"
+        )
+        select.callback = self.squad_selected
+        self.add_item(select)
+    
+    async def squad_selected(self, interaction: discord.Interaction):
+        selected_squad = interaction.data["values"][0]
+        
+        # Get squad role and tag
+        squad_role = discord.utils.get(self.guild.roles, name=selected_squad)
+        tag = SQUADS.get(selected_squad, "?")
+        
+        # Create temporary view to show squad info
+        temp_view = SquadMenuView(squad_role, selected_squad, tag, is_public=True)
+        await temp_view.show_squad_info(interaction)
+
 # -------------------- READY --------------------
 @bot.event
 async def on_ready():
@@ -559,6 +596,57 @@ async def safety_sync():
             await safe_nick_update(member, role, tag)
 
 # -------------------- MEMBER COMMANDS --------------------
+@bot.tree.command(name="help", description="Show all available bot commands")
+async def help_command(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="🤖 Squad Bot - Command Guide",
+        description="Here are all the commands available to you!",
+        color=discord.Color.blue()
+    )
+    
+    # Member Commands
+    embed.add_field(
+        name="👥 Member Commands",
+        value=(
+            "`/help` - Show this help menu\n"
+            "`/squad_menu` - Interactive squad management hub\n"
+            "`/browse_squads` - View any squad's information\n"
+            "`/my_squad` - Quick view of your squad\n"
+            "`/rankings` - View current squad rankings\n"
+            "`/leave_squad` - Leave your current squad"
+        ),
+        inline=False
+    )
+    
+    # Leader Commands
+    if is_leader(interaction.user):
+        embed.add_field(
+            name="👑 Leader Commands",
+            value=(
+                "`/add_member @user` - Add member to your squad\n"
+                "`/remove_member @user` - Remove member from squad\n"
+                "`/set_main_roster @user` - Add to main roster (max 5)\n"
+                "`/set_sub @user` - Add to substitutes (max 3)\n"
+                "`/promote_leader @user` - Promote to leader\n"
+                "`/give_guest @user` - Give guest role\n"
+                "`/remove_guest @user` - Remove guest role\n"
+                "`/set_logo <url>` - Set squad logo"
+            ),
+            inline=False
+        )
+    
+    # Moderator Commands
+    if is_moderator(interaction.user):
+        embed.add_field(
+            name="🛡️ Moderator Commands",
+            value="`/add_match` - Add match results between squads",
+            inline=False
+        )
+    
+    embed.set_footer(text="Use /squad_menu for the interactive interface!")
+    
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
 @bot.tree.command(name="squad_menu", description="View squad info, rankings, and setup your profile")
 async def squad_menu(interaction: discord.Interaction):
     role, tag = get_member_squad(interaction.user, interaction.guild)
@@ -584,6 +672,19 @@ async def my_squad(interaction: discord.Interaction):
     squad_name = role.name
     view = SquadMenuView(role, squad_name, tag, is_public=False)
     await view.show_squad_info(interaction)
+
+@bot.tree.command(name="browse_squads", description="Browse and view any squad's information")
+async def browse_squads(interaction: discord.Interaction):
+    view = SquadBrowserView(interaction.guild)
+    
+    embed = discord.Embed(
+        title="🔍 Squad Browser",
+        description="Select a squad from the dropdown below to view their full information, stats, roster, and more!",
+        color=discord.Color.blue()
+    )
+    embed.set_footer(text=f"Total squads: {len(SQUADS)}")
+    
+    await interaction.response.send_message(embed=embed, view=view)
 
 @bot.tree.command(name="rankings", description="View squad rankings")
 async def rankings_command(interaction: discord.Interaction):
