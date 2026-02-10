@@ -267,12 +267,37 @@ async def safe_nick_update(member, role, tag):
     except:
         pass
 
-def update_player_squad(player_id, new_squad=None):
-    """Update player's squad in their profile"""
+def update_player_squad(player_id, new_squad=None, old_squad=None):
+    """Update player's squad in their profile and track history"""
     player_key = str(player_id)
-    if player_key in squad_data["players"]:
-        squad_data["players"][player_key]["squad"] = new_squad
-        save_data(squad_data)
+    
+    # Initialize player data if it doesn't exist
+    if player_key not in squad_data["players"]:
+        squad_data["players"][player_key] = {
+            "discord_id": player_id,
+            "ingame_name": "",
+            "ingame_id": "",
+            "highest_rank": "",
+            "role": "",
+            "squad": new_squad,
+            "squad_history": []
+        }
+    
+    player_data = squad_data["players"][player_key]
+    
+    # Add to squad history if changing squads
+    if old_squad and old_squad != new_squad:
+        history_entry = {
+            "squad": old_squad,
+            "left_date": datetime.utcnow().isoformat()
+        }
+        if "squad_history" not in player_data:
+            player_data["squad_history"] = []
+        player_data["squad_history"].append(history_entry)
+    
+    # Update current squad
+    player_data["squad"] = new_squad
+    save_data(squad_data)
 
 def get_squad_ranking():
     """Get squads sorted by points with ranking position and win rate"""
@@ -482,50 +507,80 @@ class PlayerSetupModal(Modal, title="🎭 Royal Profile Setup"):
     ingame_name = TextInput(
         label="In-Game Name",
         placeholder="Enter your IGN",
-        required=True,
+        required=False,
         max_length=50
     )
     
     ingame_id = TextInput(
         label="In-Game ID",
         placeholder="Enter your game ID",
-        required=True,
+        required=False,
         max_length=50
     )
     
     highest_rank = TextInput(
         label="Highest Rank",
         placeholder="e.g., Mythic Glory, Legend, etc.",
-        required=True,
+        required=False,
         max_length=50
     )
     
-    def __init__(self, user_id: int, squad_name: str, role: str):
+    def __init__(self, user_id: int, squad_name: str, role: str, existing_data: dict = None):
         super().__init__()
         self.user_id = user_id
         self.squad_name = squad_name
         self.player_role = role
+        self.existing_data = existing_data or {}
+        
+        # Pre-fill fields with existing data
+        if existing_data:
+            if existing_data.get("ingame_name"):
+                self.ingame_name.default = existing_data.get("ingame_name")
+            if existing_data.get("ingame_id"):
+                self.ingame_id.default = existing_data.get("ingame_id")
+            if existing_data.get("highest_rank"):
+                self.highest_rank.default = existing_data.get("highest_rank")
     
     async def on_submit(self, interaction: discord.Interaction):
         player_key = str(self.user_id)
-        squad_data["players"][player_key] = {
-            "discord_id": self.user_id,
-            "ingame_name": self.ingame_name.value,
-            "ingame_id": self.ingame_id.value,
-            "highest_rank": self.highest_rank.value,
-            "role": self.player_role,
-            "squad": self.squad_name
-        }
+        
+        # Get existing data or create new
+        if player_key in squad_data["players"]:
+            player_data = squad_data["players"][player_key]
+        else:
+            player_data = {
+                "discord_id": self.user_id,
+                "ingame_name": "",
+                "ingame_id": "",
+                "highest_rank": "",
+                "role": "",
+                "squad": self.squad_name,
+                "squad_history": []
+            }
+        
+        # Update only filled fields (or keep existing if not changed)
+        if self.ingame_name.value:
+            player_data["ingame_name"] = self.ingame_name.value
+        if self.ingame_id.value:
+            player_data["ingame_id"] = self.ingame_id.value
+        if self.highest_rank.value:
+            player_data["highest_rank"] = self.highest_rank.value
+        
+        # Always update role and squad
+        player_data["role"] = self.player_role
+        player_data["squad"] = self.squad_name
+        
+        squad_data["players"][player_key] = player_data
         save_data(squad_data)
         
         embed = discord.Embed(
-            title="✅ Royal Profile Established",
-            description=f"Your warrior profile has been inscribed in the royal archives!",
+            title="✅ Royal Profile Updated",
+            description=f"Your warrior profile has been updated in the royal archives!",
             color=ROYAL_GOLD
         )
-        embed.add_field(name="⚔️ IGN", value=self.ingame_name.value, inline=True)
-        embed.add_field(name="🎯 ID", value=self.ingame_id.value, inline=True)
-        embed.add_field(name="🏆 Rank", value=self.highest_rank.value, inline=True)
+        embed.add_field(name="⚔️ IGN", value=player_data["ingame_name"] or "Not set", inline=True)
+        embed.add_field(name="🎯 ID", value=player_data["ingame_id"] or "Not set", inline=True)
+        embed.add_field(name="🏆 Rank", value=player_data["highest_rank"] or "Not set", inline=True)
         embed.add_field(name="💼 Role", value=f"{ROLE_EMOJIS.get(self.player_role, '⚔️')} {self.player_role}", inline=True)
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -756,7 +811,12 @@ class RoleSelectView(View):
             return
         
         selected_role = interaction.data["values"][0]
-        modal = PlayerSetupModal(self.user_id, self.squad_name, selected_role)
+        
+        # Get existing player data if available
+        player_key = str(self.user_id)
+        existing_data = squad_data["players"].get(player_key, {})
+        
+        modal = PlayerSetupModal(self.user_id, self.squad_name, selected_role, existing_data)
         await interaction.response.send_modal(modal)
 
 class SquadBrowserView(View):
@@ -930,11 +990,20 @@ async def show_player_profile(interaction, member: discord.Member, public=False)
     player_key = str(member.id)
     player_data = squad_data["players"].get(player_key)
     
-    if not player_data:
-        await interaction.response.send_message(
-            f"❌ {member.mention} has not established their warrior profile yet.",
-            ephemeral=True
+    if not player_data or not player_data.get("ingame_name"):
+        # Friendly message suggesting profile setup
+        embed = discord.Embed(
+            title="🎭 Warrior Profile Not Found",
+            description=f"⚜️ {member.mention} hasn't established their warrior profile yet.",
+            color=ROYAL_BLUE
         )
+        embed.add_field(
+            name="💡 How to Create Your Profile",
+            value="Use `/members` → Click **'Setup Profile'** to create your warrior profile!\n\nYou can setup your profile even without joining a squad!",
+            inline=False
+        )
+        embed.set_thumbnail(url=member.display_avatar.url)
+        await interaction.response.send_message(embed=embed, ephemeral=not public)
         return
     
     # Get squad info
@@ -999,6 +1068,29 @@ async def show_player_profile(interaction, member: discord.Member, public=False)
             inline=False
         )
     
+    # Squad History
+    squad_history = player_data.get("squad_history", [])
+    if squad_history:
+        history_text = ""
+        for entry in squad_history[-5:]:  # Show last 5 squads
+            squad = entry.get("squad", "Unknown")
+            tag = SQUADS.get(squad, "?")
+            try:
+                left_date = datetime.fromisoformat(entry.get("left_date", ""))
+                date_str = left_date.strftime("%b %Y")
+            except:
+                date_str = "Unknown"
+            history_text += f"{tag} **{squad}** _(left {date_str})_\n"
+        
+        if len(squad_history) > 5:
+            history_text += f"*...and {len(squad_history) - 5} more*"
+        
+        embed.add_field(
+            name="📜 Kingdom History",
+            value=history_text,
+            inline=False
+        )
+    
     # Statistics (if available)
     if stats and squad_name and squad_name != "Free Agent":
         win_rate = stats['win_rate']
@@ -1024,7 +1116,7 @@ async def show_player_profile(interaction, member: discord.Member, public=False)
     
     # Set member avatar as thumbnail
     embed.set_thumbnail(url=member.display_avatar.url)
-    embed.set_footer(text="⚜️ Glory to the warrior")
+    embed.set_footer(text="⚜️ Glory to the warrior | Use /members → Setup Profile to update")
     
     await interaction.response.send_message(embed=embed, ephemeral=not public)
 
@@ -1258,8 +1350,8 @@ class MemberPanelView(View):
             await interaction.response.send_message("❌ You are not sworn to any kingdom.", ephemeral=True)
             return
         
-        # Update player profile - remove squad affiliation
-        update_player_squad(interaction.user.id, None)
+        # Update player profile - remove squad affiliation and track history
+        update_player_squad(interaction.user.id, None, role.name)
         
         await interaction.user.remove_roles(role)
         await safe_nick_update(interaction.user, None, None)
@@ -1437,6 +1529,10 @@ async def add_member(interaction: discord.Interaction, member: discord.Member):
         await interaction.response.send_message("❌ You must be sworn to a kingdom.", ephemeral=True)
         return
     
+    # Get old squad before removing
+    old_squad_role, _ = get_member_squad(member, interaction.guild)
+    old_squad_name = old_squad_role.name if old_squad_role else None
+    
     # Remove from other squads
     for r_name in SQUADS:
         r = discord.utils.get(interaction.guild.roles, name=r_name)
@@ -1446,8 +1542,8 @@ async def add_member(interaction: discord.Interaction, member: discord.Member):
     await member.add_roles(squad_role)
     await safe_nick_update(member, squad_role, tag)
     
-    # Update player profile squad
-    update_player_squad(member.id, squad_role.name)
+    # Update player profile squad and track history
+    update_player_squad(member.id, squad_role.name, old_squad_name)
     
     embed = discord.Embed(
         title="✅ Warrior Recruited",
@@ -1484,8 +1580,8 @@ async def remove_member(interaction: discord.Interaction, member: discord.Member
         squad_info["subs"].remove(member.id)
     save_data(squad_data)
     
-    # Update player profile
-    update_player_squad(member.id, None)
+    # Update player profile and track history
+    update_player_squad(member.id, None, squad_role.name)
     
     await member.remove_roles(squad_role)
     clean = remove_all_tags(member.display_name)
