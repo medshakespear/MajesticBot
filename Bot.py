@@ -41,7 +41,6 @@ SQUADS = {
     "The void": "VD",
     "SRG": "SRG",
     "Blood Moon": "Blod",
-    "Titans": "TTS",
     "Red Raptors": "RED",
     "TEENYI BAMBUSEL": "TNY",
     "Force X": "X͠",
@@ -82,7 +81,6 @@ GUEST_ROLES = {
     "Kite buu": "Kite.buu_guest",
     "Red Raptors": "Red.Raptors_guest",
     "SRG": "SRG_guest",
-    "Titans": "Titans_guest",
     "NONKAR": "Nonkar_guest",
     "Exeed": "Exeed_guest",
     "One More Esports": "One.More.Esports_guest",
@@ -820,12 +818,22 @@ class RoleSelectView(View):
         await interaction.response.send_modal(modal)
 
 class SquadBrowserView(View):
-    def __init__(self, guild):
+    def __init__(self, guild, page=1):
         super().__init__(timeout=180)
         self.guild = guild
+        self.page = page
+        
+        # Get all squads sorted alphabetically
+        all_squads = sorted(SQUADS.items())
+        
+        # Paginate: 25 per page (Discord limit)
+        if page == 1:
+            squads_to_show = all_squads[:25]
+        else:
+            squads_to_show = all_squads[25:]
         
         options = []
-        for squad_name, tag in sorted(SQUADS.items()):
+        for squad_name, tag in squads_to_show:
             options.append(
                 discord.SelectOption(
                     label=squad_name,
@@ -836,12 +844,41 @@ class SquadBrowserView(View):
             )
         
         select = Select(
-            placeholder="🏰 Choose a kingdom to explore...",
-            options=options[:25],
-            custom_id="squad_browser_select"
+            placeholder=f"🏰 Choose a kingdom to explore... (Page {page})",
+            options=options,
+            custom_id=f"squad_browser_select_p{page}"
         )
         select.callback = self.squad_selected
         self.add_item(select)
+        
+        # Add page navigation buttons if needed
+        if len(all_squads) > 25:
+            if page == 1:
+                next_button = Button(label="Next Page →", style=discord.ButtonStyle.primary, emoji="➡️")
+                next_button.callback = self.next_page
+                self.add_item(next_button)
+            else:
+                prev_button = Button(label="← Previous Page", style=discord.ButtonStyle.primary, emoji="⬅️")
+                prev_button.callback = self.prev_page
+                self.add_item(prev_button)
+    
+    async def next_page(self, interaction: discord.Interaction):
+        view = SquadBrowserView(self.guild, page=2)
+        embed = discord.Embed(
+            title="🏰 Kingdom Explorer - Page 2",
+            description="⚜️ Select a kingdom from the dropdown to view their Royal house!",
+            color=ROYAL_BLUE
+        )
+        await interaction.response.edit_message(embed=embed, view=view)
+    
+    async def prev_page(self, interaction: discord.Interaction):
+        view = SquadBrowserView(self.guild, page=1)
+        embed = discord.Embed(
+            title="🏰 Kingdom Explorer - Page 1",
+            description="⚜️ Select a kingdom from the dropdown to view their Royal house!",
+            color=ROYAL_BLUE
+        )
+        await interaction.response.edit_message(embed=embed, view=view)
     
     async def squad_selected(self, interaction: discord.Interaction):
         selected_squad = interaction.data["values"][0]
@@ -1280,31 +1317,49 @@ class HelpCategoryView(View):
         embed.set_footer(text="⚜️ Royal Command Archives")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-class MemberPanelView(View):
-    def __init__(self):
-        super().__init__(timeout=None)
-    
-    @discord.ui.button(label="Browse Kingdoms", style=discord.ButtonStyle.primary, emoji="🏰", row=0)
-    async def browse_squads_button(self, interaction: discord.Interaction, button: Button):
-        view = SquadBrowserView(interaction.guild)
-        embed = discord.Embed(
-            title="🏰 Kingdom Explorer",
-            description="⚜️ Select a kingdom from the dropdown to view their Royal house!",
-            color=ROYAL_BLUE
-        )
-        await interaction.response.send_message(embed=embed, view=view)
-    
-    @discord.ui.button(label="Rankings", style=discord.ButtonStyle.secondary, emoji="🏆", row=0)
-    async def rankings_button(self, interaction: discord.Interaction, button: Button):
+class RankingsView(View):
+    """Paginated view for rankings"""
+    def __init__(self, page=1):
+        super().__init__(timeout=180)
+        self.page = page
+        
         rankings = get_squad_ranking()
+        total_pages = (len(rankings) + 14) // 15
+        
+        # Add pagination buttons if needed
+        if page > 1:
+            prev_button = Button(label="← Previous", style=discord.ButtonStyle.secondary, emoji="⬅️")
+            prev_button.callback = self.prev_page
+            self.add_item(prev_button)
+        
+        if page < total_pages:
+            next_button = Button(label="Next →", style=discord.ButtonStyle.secondary, emoji="➡️")
+            next_button.callback = self.next_page
+            self.add_item(next_button)
+    
+    async def prev_page(self, interaction: discord.Interaction):
+        await self.show_rankings(interaction, self.page - 1)
+    
+    async def next_page(self, interaction: discord.Interaction):
+        await self.show_rankings(interaction, self.page + 1)
+    
+    async def show_rankings(self, interaction: discord.Interaction, page: int):
+        rankings = get_squad_ranking()
+        total_squads = len(rankings)
+        total_pages = (total_squads + 14) // 15
+        
+        # Calculate pagination
+        start_idx = (page - 1) * 15
+        end_idx = min(start_idx + 15, total_squads)
+        page_rankings = rankings[start_idx:end_idx]
         
         embed = discord.Embed(
             title="🏆 Royal Leaderboard",
-            description="⚜️ *Current standings of the Royal houses*",
+            description=f"⚜️ *Current standings of the Royal houses* (Page {page}/{total_pages})",
             color=ROYAL_GOLD
         )
         
-        for squad in rankings[:20]:
+        for squad in page_rankings:
             i = squad["rank"]
             medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"🏅 **{i}.**"
             embed.add_field(
@@ -1313,8 +1368,52 @@ class MemberPanelView(View):
                 inline=False
             )
         
-        embed.set_footer(text="⚜️ Glory to the victorious!")
-        await interaction.response.send_message(embed=embed)
+        embed.set_footer(text=f"⚜️ Glory to the victorious! | Showing all {total_squads} kingdoms")
+        
+        view = RankingsView(page=page)
+        await interaction.response.edit_message(embed=embed, view=view)
+
+class MemberPanelView(View):
+    def __init__(self):
+        super().__init__(timeout=None)
+    
+    @discord.ui.button(label="Browse Kingdoms", style=discord.ButtonStyle.primary, emoji="🏰", row=0)
+    async def browse_squads_button(self, interaction: discord.Interaction, button: Button):
+        view = SquadBrowserView(interaction.guild, page=1)
+        embed = discord.Embed(
+            title="🏰 Kingdom Explorer - Page 1",
+            description="⚜️ Select a kingdom from the dropdown to view their Royal house!",
+            color=ROYAL_BLUE
+        )
+        await interaction.response.send_message(embed=embed, view=view)
+    
+    @discord.ui.button(label="Rankings", style=discord.ButtonStyle.secondary, emoji="🏆", row=0)
+    async def rankings_button(self, interaction: discord.Interaction, button: Button):
+        rankings = get_squad_ranking()
+        total_squads = len(rankings)
+        total_pages = (total_squads + 14) // 15  # 15 per page
+        
+        embed = discord.Embed(
+            title="🏆 Royal Leaderboard",
+            description=f"⚜️ *Current standings of the Royal houses* (Page 1/{total_pages})",
+            color=ROYAL_GOLD
+        )
+        
+        # Show first 15 squads
+        for squad in rankings[:15]:
+            i = squad["rank"]
+            medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"🏅 **{i}.**"
+            embed.add_field(
+                name=f"{medal} {squad['tag']} {squad['name']}",
+                value=f"💎 **{squad['points']}** pts | 🏆 {squad['wins']}W-{squad['draws']}D-{squad['losses']}L | 📊 WR: **{squad['win_rate']:.1f}%**",
+                inline=False
+            )
+        
+        embed.set_footer(text=f"⚜️ Glory to the victorious! | Showing all {total_squads} kingdoms")
+        
+        # Create view with pagination if needed
+        view = RankingsView(page=1) if total_pages > 1 else None
+        await interaction.response.send_message(embed=embed, view=view)
     
     @discord.ui.button(label="My Kingdom", style=discord.ButtonStyle.success, emoji="🛡️", row=1)
     async def my_squad_button(self, interaction: discord.Interaction, button: Button):
@@ -1350,16 +1449,48 @@ class MemberPanelView(View):
             await interaction.response.send_message("❌ You are not sworn to any kingdom.", ephemeral=True)
             return
         
-        # Update player profile - remove squad affiliation and track history
-        update_player_squad(interaction.user.id, None, role.name)
+        # Create confirmation view
+        confirm_view = View(timeout=60)
         
-        await interaction.user.remove_roles(role)
-        await safe_nick_update(interaction.user, None, None)
-        await interaction.response.send_message(f"🚪 You have departed from **{role.name}**. Farewell, Royal warrior.", ephemeral=True)
-        await log_action(
-            interaction.guild,
-            "🚪 Kingdom Departed",
-            f"{interaction.user.mention} has left **{role.name}**"
+        async def confirm_leave(confirm_interaction: discord.Interaction):
+            if confirm_interaction.user.id != interaction.user.id:
+                await confirm_interaction.response.send_message("❌ This is not your confirmation.", ephemeral=True)
+                return
+            
+            # Update player profile - remove squad affiliation and track history
+            update_player_squad(interaction.user.id, None, role.name)
+            
+            await interaction.user.remove_roles(role)
+            await safe_nick_update(interaction.user, None, None)
+            await confirm_interaction.response.send_message(
+                f"🚪 You have departed from **{role.name}**. Your journey continues, Royal warrior.\n\n*Your profile and history have been preserved.*",
+                ephemeral=True
+            )
+            await log_action(
+                interaction.guild,
+                "🚪 Kingdom Departed",
+                f"{interaction.user.mention} has left **{role.name}**"
+            )
+        
+        async def cancel_leave(cancel_interaction: discord.Interaction):
+            if cancel_interaction.user.id != interaction.user.id:
+                await cancel_interaction.response.send_message("❌ This is not your confirmation.", ephemeral=True)
+                return
+            await cancel_interaction.response.send_message("✅ Cancelled. You remain in your kingdom.", ephemeral=True)
+        
+        confirm_button = Button(label="✓ Confirm Leave", style=discord.ButtonStyle.danger)
+        confirm_button.callback = confirm_leave
+        
+        cancel_button = Button(label="✗ Cancel", style=discord.ButtonStyle.secondary)
+        cancel_button.callback = cancel_leave
+        
+        confirm_view.add_item(confirm_button)
+        confirm_view.add_item(cancel_button)
+        
+        await interaction.response.send_message(
+            f"⚠️ **Confirm Departure**\n\nAre you sure you want to leave **{role.name}**?\n\n*Your profile will be preserved and this kingdom will be added to your history.*",
+            view=confirm_view,
+            ephemeral=True
         )
 
 class LeaderPanelView(View):
@@ -1421,24 +1552,48 @@ async def safety_sync():
 async def members_panel(interaction: discord.Interaction):
     view = MemberPanelView()
     
+    # Get quick stats
+    total_squads = len(SQUADS)
+    total_matches = len(squad_data["matches"])
+    rankings = get_squad_ranking()
+    top_squad = rankings[0] if rankings else None
+    
+    # Get user's squad if they have one
+    user_role, user_tag = get_member_squad(interaction.user, interaction.guild)
+    user_squad_text = f"\n\n🛡️ **Your Kingdom:** {user_tag} {user_role.name}" if user_role else "\n\n⚔️ **Status:** Free Agent"
+    
     embed = discord.Embed(
         title="👥 Royal Member Hall",
-        description="⚜️ *Welcome to the royal chambers, warrior. Use the buttons below to navigate.*",
+        description=f"⚜️ *Welcome to the royal chambers, {interaction.user.display_name}.*{user_squad_text}",
         color=ROYAL_BLUE
     )
+    
+    # Realm stats
     embed.add_field(
-        name="📜 Available Actions",
+        name="🌟 Realm Overview",
         value=(
-            "🏰 Browse all kingdoms\n"
-            "🏆 View royal leaderboard\n"
-            "🛡️ View your kingdom\n"
-            "🎭 View your profile publicly\n"
-            "⚙️ Setup your warrior profile\n"
-            "🚪 Depart from your kingdom"
+            f"🏰 **{total_squads}** Noble Kingdoms\n"
+            f"⚔️ **{total_matches}** Epic Battles\n" +
+            (f"👑 Leading: **{top_squad['name']}** ({top_squad['points']} pts)" if top_squad else "")
         ),
         inline=False
     )
-    embed.set_footer(text="⚜️ May honor guide your path")
+    
+    embed.add_field(
+        name="📜 Available Actions",
+        value=(
+            "🏰 **Browse Kingdoms** - Explore all royal houses\n"
+            "🏆 **Rankings** - View the leaderboard\n"
+            "🛡️ **My Kingdom** - Your current allegiance\n"
+            "🎭 **My Profile** - View your warrior profile\n"
+            "⚙️ **Setup Profile** - Update your information\n"
+            "🚪 **Leave Kingdom** - Depart from your squad"
+        ),
+        inline=False
+    )
+    
+    embed.set_footer(text="⚜️ May honor guide your path | Use buttons below to navigate")
+    embed.set_thumbnail(url=interaction.user.display_avatar.url)
     
     # CHANGE 2: Make member panel visible to everyone
     await interaction.response.send_message(embed=embed, view=view)
