@@ -960,9 +960,21 @@ async def show_squad_info(interaction, squad_role, squad_name, tag, public=False
         roster_text = ""
         for player_id in main_roster[:5]:
             player_data = squad_data["players"].get(str(player_id), {})
-            if player_data:
+            # Try to get the actual member from guild
+            member = interaction.guild.get_member(player_id) if interaction.guild else None
+            
+            if player_data and player_data.get('ingame_name'):
+                # Player has profile setup
                 role_emoji = ROLE_EMOJIS.get(player_data.get('role', ''), '⚔️')
-                roster_text += f"{role_emoji} **{player_data.get('role', 'N/A')}**: {player_data.get('ingame_name', 'Unknown')} (#{player_data.get('ingame_id', 'N/A')}) - {player_data.get('highest_rank', 'Unranked')}\n"
+                discord_name = member.display_name if member else "Unknown"
+                roster_text += f"{role_emoji} **{discord_name}** - {player_data.get('ingame_name')} (#{player_data.get('ingame_id', 'N/A')}) - {player_data.get('highest_rank', 'Unranked')}\n"
+            elif member:
+                # Player exists but no profile
+                roster_text += f"⚔️ **{member.display_name}** - *No profile setup*\n"
+            else:
+                # Player left server
+                roster_text += f"⚔️ **Unknown Warrior** - *Member left*\n"
+        
         if roster_text:
             embed.add_field(name="⭐ Elite Warriors (Main Roster)", value=roster_text, inline=False)
     
@@ -970,22 +982,33 @@ async def show_squad_info(interaction, squad_role, squad_name, tag, public=False
         subs_text = ""
         for player_id in subs[:3]:
             player_data = squad_data["players"].get(str(player_id), {})
-            if player_data:
+            member = interaction.guild.get_member(player_id) if interaction.guild else None
+            
+            if player_data and player_data.get('ingame_name'):
+                # Player has profile setup
                 role_emoji = ROLE_EMOJIS.get(player_data.get('role', ''), '⚔️')
-                subs_text += f"{role_emoji} **{player_data.get('role', 'N/A')}**: {player_data.get('ingame_name', 'Unknown')} (#{player_data.get('ingame_id', 'N/A')})\n"
+                discord_name = member.display_name if member else "Unknown"
+                subs_text += f"{role_emoji} **{discord_name}** - {player_data.get('ingame_name')} (#{player_data.get('ingame_id', 'N/A')})\n"
+            elif member:
+                # Player exists but no profile
+                subs_text += f"⚔️ **{member.display_name}** - *No profile setup*\n"
+            else:
+                # Player left server
+                subs_text += f"⚔️ **Unknown Warrior** - *Member left*\n"
+        
         if subs_text:
             embed.add_field(name="🔄 Reserve Warriors (Substitutes)", value=subs_text, inline=False)
     
-    # If no roster set, show all squad members
+    # If no roster set, show all squad members with Discord names
     if not main_roster and not subs and squad_role:
         all_members_text = ""
         for member in squad_role.members[:20]:  # Limit to 20
             player_data = squad_data["players"].get(str(member.id), {})
-            if player_data:
+            if player_data and player_data.get('ingame_name'):
                 role_emoji = ROLE_EMOJIS.get(player_data.get('role', ''), '⚔️')
-                all_members_text += f"{role_emoji} {player_data.get('ingame_name', member.display_name)}\n"
+                all_members_text += f"{role_emoji} **{member.display_name}** - {player_data.get('ingame_name')}\n"
             else:
-                all_members_text += f"⚔️ {member.display_name}\n"
+                all_members_text += f"⚔️ **{member.display_name}** - *Warrior (no profile)*\n"
         
         if all_members_text:
             embed.add_field(
@@ -1210,6 +1233,11 @@ class HelpCategoryView(View):
                 inline=False
             )
             embed.add_field(
+                name="/view_history @user",
+                value="📜 View a player's complete squad journey and history\n*Example: `/view_history @JohnDoe`*",
+                inline=False
+            )
+            embed.add_field(
                 name="/rivalry squad1 squad2",
                 value="⚔️ View head-to-head battle statistics between two kingdoms\n*Example: `/rivalry ROYALS Manschaft`*",
                 inline=False
@@ -1311,6 +1339,16 @@ class HelpCategoryView(View):
             embed.add_field(
                 name="/recent_matches limit",
                 value="📜 View recent match results with IDs\n*Example: `/recent_matches 10`*",
+                inline=False
+            )
+            embed.add_field(
+                name="/clear_history @user",
+                value="🗑️ Clear a player's squad history permanently\n*Example: `/clear_history @JohnDoe`*",
+                inline=False
+            )
+            embed.add_field(
+                name="/view_history @user",
+                value="📜 View a player's complete squad journey (Available to all)\n*Example: `/view_history @JohnDoe`*",
                 inline=False
             )
         
@@ -2296,6 +2334,135 @@ async def recent_matches(interaction: discord.Interaction, limit: int = 10):
     embed.set_footer(text="Use /delete_match <match_id> to remove a match")
     
     await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="clear_history", description="🗑️ Clear a player's squad history (Moderator)")
+async def clear_history(interaction: discord.Interaction, member: discord.Member):
+    """Clear a player's squad history (moderator only)"""
+    if not is_moderator(interaction.user):
+        await interaction.response.send_message("❌ Only royal moderators may clear squad history.", ephemeral=True)
+        return
+    
+    player_key = str(member.id)
+    
+    if player_key not in squad_data["players"]:
+        await interaction.response.send_message(
+            f"❌ {member.mention} doesn't have a profile in the system.",
+            ephemeral=True
+        )
+        return
+    
+    player_data = squad_data["players"][player_key]
+    old_history = player_data.get("squad_history", [])
+    
+    if not old_history:
+        await interaction.response.send_message(
+            f"ℹ️ {member.mention} has no squad history to clear.",
+            ephemeral=True
+        )
+        return
+    
+    # Clear the history
+    player_data["squad_history"] = []
+    save_data(squad_data)
+    
+    embed = discord.Embed(
+        title="🗑️ Squad History Cleared",
+        description=f"⚜️ Cleared squad history for {member.mention}",
+        color=ROYAL_PURPLE
+    )
+    embed.add_field(
+        name="📜 Squads Removed from History",
+        value=f"**{len(old_history)}** previous squad{'s' if len(old_history) != 1 else ''} cleared",
+        inline=False
+    )
+    
+    # List what was cleared
+    if old_history:
+        cleared_text = ""
+        for entry in old_history[:5]:
+            squad = entry.get("squad", "Unknown")
+            tag = SQUADS.get(squad, "?")
+            cleared_text += f"{tag} {squad}\n"
+        if len(old_history) > 5:
+            cleared_text += f"*...and {len(old_history) - 5} more*"
+        embed.add_field(name="Cleared Squads", value=cleared_text, inline=False)
+    
+    embed.set_thumbnail(url=member.display_avatar.url)
+    embed.set_footer(text="This action cannot be undone")
+    
+    await interaction.response.send_message(embed=embed)
+    await log_action(
+        interaction.guild,
+        "🗑️ Squad History Cleared",
+        f"{interaction.user.mention} cleared squad history for {member.mention}"
+    )
+
+@bot.tree.command(name="view_history", description="📜 View a player's complete squad history")
+async def view_history(interaction: discord.Interaction, member: discord.Member):
+    """View a player's squad history (available to everyone)"""
+    player_key = str(member.id)
+    
+    if player_key not in squad_data["players"]:
+        await interaction.response.send_message(
+            f"❌ {member.mention} doesn't have a profile in the system.",
+            ephemeral=True
+        )
+        return
+    
+    player_data = squad_data["players"][player_key]
+    squad_history = player_data.get("squad_history", [])
+    current_squad = player_data.get("squad")
+    
+    embed = discord.Embed(
+        title=f"📜 Squad History: {member.display_name}",
+        description=f"⚜️ *{member.mention}'s journey through the kingdoms*",
+        color=ROYAL_BLUE
+    )
+    
+    # Current squad
+    if current_squad and current_squad != "Free Agent":
+        tag = SQUADS.get(current_squad, "?")
+        embed.add_field(
+            name="🛡️ Current Kingdom",
+            value=f"{tag} **{current_squad}**",
+            inline=False
+        )
+    elif current_squad == "Free Agent":
+        embed.add_field(
+            name="🛡️ Current Status",
+            value="⚔️ **Free Agent**",
+            inline=False
+        )
+    
+    # History
+    if squad_history:
+        history_text = ""
+        for i, entry in enumerate(squad_history, 1):
+            squad = entry.get("squad", "Unknown")
+            tag = SQUADS.get(squad, "?")
+            try:
+                left_date = datetime.fromisoformat(entry.get("left_date", ""))
+                date_str = left_date.strftime("%b %d, %Y")
+            except:
+                date_str = "Unknown date"
+            history_text += f"{i}. {tag} **{squad}** _(left {date_str})_\n"
+        
+        embed.add_field(
+            name=f"📚 Previous Kingdoms ({len(squad_history)})",
+            value=history_text,
+            inline=False
+        )
+    else:
+        embed.add_field(
+            name="📚 Previous Kingdoms",
+            value="*No squad history yet*",
+            inline=False
+        )
+    
+    embed.set_thumbnail(url=member.display_avatar.url)
+    embed.set_footer(text="⚜️ Every journey tells a story")
+    
+    await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="rivalry", description="⚔️ View head-to-head stats between two kingdoms")
 async def rivalry_command(interaction: discord.Interaction, squad1: str, squad2: str):
