@@ -18,7 +18,15 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # -------------------- CONFIG --------------------
 LEADER_ROLE_NAME = "LEADER"
 MODERATOR_ROLE_NAME = "MODERATOR"
-DATA_FILE = "squad_data.json"
+
+# CRITICAL: Use persistent volume for data storage
+# Railway Volume mount path: /data
+# This ensures data survives redeployments!
+DATA_DIR = os.getenv("DATA_DIR", "/data")
+DATA_FILE = os.path.join(DATA_DIR, "squad_data.json")
+
+# Create data directory if it doesn't exist
+os.makedirs(DATA_DIR, exist_ok=True)
 
 # Royal color scheme
 ROYAL_PURPLE = 0x6a0dad
@@ -56,6 +64,7 @@ SQUADS = {
     "ENNEAD": "EN",
     "Ethereal": "ÆTH",
     "浪 Ronin'": "DVNA",
+    "Death Dose": "DD•",
 }
 
 GUEST_ROLES = {
@@ -86,6 +95,7 @@ GUEST_ROLES = {
     "One More Esports": "One.More.Esports_guest",
     "asgard warriors": "Asguard.Warriors_guest",
     "Manschaft": "Manschaft_guest",
+    "Death Dose": "death.dose_guest",
 }
 
 ROLES = ["Gold Lane", "Mid Lane", "Exp Lane", "Jungler", "Roamer"]
@@ -165,7 +175,16 @@ def load_data():
     """Load squad data from JSON file"""
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
+            data = json.load(f)
+            
+            # Backward compatibility: Add participants to old matches
+            for match in data.get("matches", []):
+                if "team1_participants" not in match:
+                    match["team1_participants"] = []  # Empty = count all
+                if "team2_participants" not in match:
+                    match["team2_participants"] = []
+            
+            return data
     
     # Initialize default data structure
     data = {
@@ -332,26 +351,59 @@ def get_squad_rank(squad_name):
     return None
 
 def get_player_stats(player_id):
-    """Get comprehensive player statistics"""
+    """Get comprehensive player statistics - only counts matches player participated in"""
     player_key = str(player_id)
     player_data = squad_data["players"].get(player_key)
     
     if not player_data:
         return None
     
-    # Count matches the player participated in
+    # Count matches the player actually participated in
     matches_played = 0
     wins = 0
     losses = 0
     draws = 0
     
     squad_name = player_data.get("squad")
-    if squad_name and squad_name in squad_data["squads"]:
-        squad_info = squad_data["squads"][squad_name]
-        matches_played = squad_info["wins"] + squad_info["losses"] + squad_info["draws"]
-        wins = squad_info["wins"]
-        losses = squad_info["losses"]
-        draws = squad_info["draws"]
+    if squad_name and squad_name != "Free Agent":
+        # Go through all matches and check participation
+        for match in squad_data["matches"]:
+            # Check if player's squad was in this match
+            if match["team1"] == squad_name:
+                participants = match.get("team1_participants", [])
+                was_opposing = False
+            elif match["team2"] == squad_name:
+                participants = match.get("team2_participants", [])
+                was_opposing = True
+            else:
+                continue  # Player's squad not in this match
+            
+            # Check if player participated
+            # Empty participants list = count all (backward compat or <5 mains)
+            if not participants or player_id in participants:
+                matches_played += 1
+                
+                # Determine result for this player
+                try:
+                    score1, score2 = map(int, match["score"].split('-'))
+                    if match["team1"] == squad_name:
+                        # Player's team was team1
+                        if score1 > score2:
+                            wins += 1
+                        elif score2 > score1:
+                            losses += 1
+                        else:
+                            draws += 1
+                    else:
+                        # Player's team was team2
+                        if score2 > score1:
+                            wins += 1
+                        elif score1 > score2:
+                            losses += 1
+                        else:
+                            draws += 1
+                except:
+                    pass  # Skip malformed scores
     
     return {
         "matches_played": matches_played,
@@ -588,6 +640,21 @@ class PlayerSetupModal(Modal, title="🎭 Royal Profile Setup"):
             f"{interaction.user.mention} updated their warrior profile"
         )
 
+def get_match_participants(squad_name):
+    """Get list of player IDs who should count for match stats.
+    
+    RULE: Only track mains if exactly 5 are set, otherwise count all.
+    """
+    squad_info = squad_data["squads"][squad_name]
+    main_roster = squad_info.get("main_roster", [])
+    
+    # Only track specific players if exactly 5 mains are set
+    if len(main_roster) == 5:
+        return main_roster.copy()
+    else:
+        # Empty list = count all squad members (backward compat)
+        return []
+
 class AddMatchModal(Modal, title="⚔️ Record Battle Result"):
     team1 = TextInput(
         label="First Kingdom",
@@ -681,13 +748,19 @@ class AddMatchModal(Modal, title="⚔️ Record Battle Result"):
         # Generate unique match ID
         match_id = str(uuid.uuid4())[:8]
         
+        # Get participants (only if exactly 5 mains are set)
+        team1_participants = get_match_participants(self.team1.value)
+        team2_participants = get_match_participants(self.team2.value)
+        
         match_data = {
             "match_id": match_id,
             "team1": self.team1.value,
             "team2": self.team2.value,
             "score": self.result.value,
             "date": datetime.utcnow().isoformat(),
-            "added_by": interaction.user.id
+            "added_by": interaction.user.id,
+            "team1_participants": team1_participants,  # NEW: Track who played
+            "team2_participants": team2_participants   # NEW: Track who played
         }
         
         squad_data["matches"].append(match_data)
@@ -1059,7 +1132,7 @@ async def show_player_profile(interaction, member: discord.Member, public=False)
         )
         embed.add_field(
             name="💡 How to Create Your Profile",
-            value="Use `/members` → Click **'Setup Profile'** to create your warrior profile!\n\nYou can setup your profile even without joining a squad!",
+            value="Use `/majestic_members` → Click **'Setup Profile'** to create your warrior profile!\n\nYou can setup your profile even without joining a squad!",
             inline=False
         )
         embed.set_thumbnail(url=member.display_avatar.url)
@@ -1176,7 +1249,7 @@ async def show_player_profile(interaction, member: discord.Member, public=False)
     
     # Set member avatar as thumbnail
     embed.set_thumbnail(url=member.display_avatar.url)
-    embed.set_footer(text="⚜️ Glory to the warrior | Use /members → Setup Profile to update")
+    embed.set_footer(text="⚜️ Glory to the warrior | Use /majestic_members → Setup Profile to update")
     
     await interaction.response.send_message(embed=embed, ephemeral=not public)
 
@@ -1223,8 +1296,8 @@ class HelpCategoryView(View):
                 color=ROYAL_BLUE
             )
             embed.add_field(
-                name="/members",
-                value="📖 Open the member panel to browse squads, view rankings, setup your profile, and manage your squad membership\n*Example: `/members`*",
+                name="/majestic_members",
+                value="📖 Open the member panel to browse squads, view rankings, setup your profile, and manage your squad membership\n*Example: `/majestic_members`*",
                 inline=False
             )
             embed.add_field(
@@ -1233,13 +1306,13 @@ class HelpCategoryView(View):
                 inline=False
             )
             embed.add_field(
-                name="/view_history @user",
-                value="📜 View a player's complete squad journey and history\n*Example: `/view_history @JohnDoe`*",
+                name="/rivalry",
+                value="⚔️ View head-to-head battle statistics (uses dropdown selector)\n*Example: `/rivalry`*",
                 inline=False
             )
             embed.add_field(
-                name="/rivalry squad1 squad2",
-                value="⚔️ View head-to-head battle statistics between two kingdoms\n*Example: `/rivalry ROYALS Manschaft`*",
+                name="/squad_history",
+                value="📜 View recent match history for any kingdom (uses dropdown selector)\n*Example: `/squad_history`*",
                 inline=False
             )
             embed.add_field(
@@ -1248,8 +1321,8 @@ class HelpCategoryView(View):
                 inline=False
             )
             embed.add_field(
-                name="/help",
-                value="📜 Display this help guide\n*Example: `/help`*",
+                name="/majestic_help",
+                value="📜 Display this help guide\n*Example: `/majestic_help`*",
                 inline=False
             )
             
@@ -1260,8 +1333,8 @@ class HelpCategoryView(View):
                 color=ROYAL_GOLD
             )
             embed.add_field(
-                name="/leader",
-                value="📖 Open the leader panel (includes Set Logo button)\n*Example: `/leader`*",
+                name="/majestic_leaders",
+                value="📖 Open the leader panel (includes Set Logo button)\n*Example: `/majestic_leaders`*",
                 inline=False
             )
             embed.add_field(
@@ -1347,8 +1420,13 @@ class HelpCategoryView(View):
                 inline=False
             )
             embed.add_field(
-                name="/view_history @user",
-                value="📜 View a player's complete squad journey (Available to all)\n*Example: `/view_history @JohnDoe`*",
+                name="/download_data",
+                value="💾 Download complete data backup as JSON file\n*Example: `/download_data`*",
+                inline=False
+            )
+            embed.add_field(
+                name="/restore_data file",
+                value="📥 Restore data from uploaded JSON backup file\n*Example: `/restore_data` (attach file)*",
                 inline=False
             )
         
@@ -1586,7 +1664,7 @@ async def safety_sync():
 # -------------------- SLASH COMMANDS --------------------
 
 # MEMBER COMMANDS
-@bot.tree.command(name="members", description="👥 Access member panel - Browse kingdoms, rankings, and manage your profile")
+@bot.tree.command(name="majestic_members", description="👥 Access member panel - Browse kingdoms, rankings, and manage your profile")
 async def members_panel(interaction: discord.Interaction):
     view = MemberPanelView()
     
@@ -1641,7 +1719,7 @@ async def profile_command(interaction: discord.Interaction, member: Optional[dis
     target = member or interaction.user
     await show_player_profile(interaction, target, public=True)
 
-@bot.tree.command(name="help", description="📜 View all available commands and their usage")
+@bot.tree.command(name="majestic_help", description="📜 View all available commands and their usage")
 async def help_command(interaction: discord.Interaction):
     view = HelpCategoryView()
     
@@ -1670,7 +1748,7 @@ async def help_command(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 # LEADER COMMANDS
-@bot.tree.command(name="leader", description="👑 Open leader panel to manage your kingdom")
+@bot.tree.command(name="majestic_leaders", description="👑 Open leader panel to manage your kingdom")
 async def leader_panel(interaction: discord.Interaction):
     if not is_leader(interaction.user):
         await interaction.response.send_message("❌ Only royal leaders may access this chamber.", ephemeral=True)
@@ -2397,94 +2475,199 @@ async def clear_history(interaction: discord.Interaction, member: discord.Member
         f"{interaction.user.mention} cleared squad history for {member.mention}"
     )
 
-@bot.tree.command(name="view_history", description="📜 View a player's complete squad history")
-async def view_history(interaction: discord.Interaction, member: discord.Member):
-    """View a player's squad history (available to everyone)"""
-    player_key = str(member.id)
-    
-    if player_key not in squad_data["players"]:
-        await interaction.response.send_message(
-            f"❌ {member.mention} doesn't have a profile in the system.",
-            ephemeral=True
-        )
+@bot.tree.command(name="download_data", description="💾 Download squad data backup (Moderator)")
+async def download_data(interaction: discord.Interaction):
+    """Download the squad_data.json file for backup (moderator only)"""
+    if not is_moderator(interaction.user):
+        await interaction.response.send_message("❌ Only royal moderators may download data.", ephemeral=True)
         return
     
-    player_data = squad_data["players"][player_key]
-    squad_history = player_data.get("squad_history", [])
-    current_squad = player_data.get("squad")
+    # Check if file exists
+    if not os.path.exists(DATA_FILE):
+        await interaction.response.send_message("❌ No data file found.", ephemeral=True)
+        return
     
-    embed = discord.Embed(
-        title=f"📜 Squad History: {member.display_name}",
-        description=f"⚜️ *{member.mention}'s journey through the kingdoms*",
-        color=ROYAL_BLUE
-    )
-    
-    # Current squad
-    if current_squad and current_squad != "Free Agent":
-        tag = SQUADS.get(current_squad, "?")
-        embed.add_field(
-            name="🛡️ Current Kingdom",
-            value=f"{tag} **{current_squad}**",
-            inline=False
+    # Send file
+    try:
+        await interaction.response.send_message(
+            "💾 **Squad Data Backup**\n\n⚜️ Here is your complete squad data file.\n\n*Save this file securely as a backup!*",
+            file=discord.File(DATA_FILE, filename=f"squad_backup_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json"),
+            ephemeral=True
         )
-    elif current_squad == "Free Agent":
-        embed.add_field(
-            name="🛡️ Current Status",
-            value="⚔️ **Free Agent**",
-            inline=False
+        await log_action(
+            interaction.guild,
+            "💾 Data Backup Downloaded",
+            f"{interaction.user.mention} downloaded squad data backup"
         )
-    
-    # History
-    if squad_history:
-        history_text = ""
-        for i, entry in enumerate(squad_history, 1):
-            squad = entry.get("squad", "Unknown")
-            tag = SQUADS.get(squad, "?")
-            try:
-                left_date = datetime.fromisoformat(entry.get("left_date", ""))
-                date_str = left_date.strftime("%b %d, %Y")
-            except:
-                date_str = "Unknown date"
-            history_text += f"{i}. {tag} **{squad}** _(left {date_str})_\n"
-        
-        embed.add_field(
-            name=f"📚 Previous Kingdoms ({len(squad_history)})",
-            value=history_text,
-            inline=False
-        )
-    else:
-        embed.add_field(
-            name="📚 Previous Kingdoms",
-            value="*No squad history yet*",
-            inline=False
-        )
-    
-    embed.set_thumbnail(url=member.display_avatar.url)
-    embed.set_footer(text="⚜️ Every journey tells a story")
-    
-    await interaction.response.send_message(embed=embed)
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Error downloading file: {e}", ephemeral=True)
 
-@bot.tree.command(name="rivalry", description="⚔️ View head-to-head stats between two kingdoms")
-async def rivalry_command(interaction: discord.Interaction, squad1: str, squad2: str):
-    """Show rivalry stats between two squads"""
-    if squad1 not in SQUADS or squad2 not in SQUADS:
-        await interaction.response.send_message(
-            "❌ One or both kingdom names are invalid. Use exact squad names.",
-            ephemeral=True
-        )
+@bot.tree.command(name="restore_data", description="📥 Restore squad data from JSON file (Moderator)")
+async def restore_data(interaction: discord.Interaction, file: discord.Attachment):
+    """Restore squad_data.json from uploaded file (moderator only)"""
+    if not is_moderator(interaction.user):
+        await interaction.response.send_message("❌ Only royal moderators may restore data.", ephemeral=True)
         return
     
+    # Verify it's a JSON file
+    if not file.filename.endswith('.json'):
+        await interaction.response.send_message("❌ File must be a .json file!", ephemeral=True)
+        return
+    
+    try:
+        # Download the attachment
+        data_bytes = await file.read()
+        data_str = data_bytes.decode('utf-8')
+        
+        # Validate it's valid JSON
+        data_obj = json.loads(data_str)
+        
+        # Backup current data if exists
+        if os.path.exists(DATA_FILE):
+            backup_path = DATA_FILE + f".backup_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+            with open(backup_path, 'w') as f:
+                json.dump(squad_data, f, indent=2)
+        
+        # Write new data
+        with open(DATA_FILE, 'w') as f:
+            json.dump(data_obj, f, indent=2)
+        
+        # Reload data into memory
+        global squad_data
+        squad_data = load_data()
+        
+        embed = discord.Embed(
+            title="✅ Data Restored Successfully",
+            description="⚜️ Squad data has been restored from uploaded file!",
+            color=ROYAL_GOLD
+        )
+        embed.add_field(
+            name="📊 Data Summary",
+            value=(
+                f"🏰 Squads: {len(data_obj.get('squads', {}))}\n"
+                f"👥 Players: {len(data_obj.get('players', {}))}\n"
+                f"⚔️ Matches: {len(data_obj.get('matches', []))}"
+            ),
+            inline=False
+        )
+        embed.add_field(
+            name="⚠️ Important",
+            value="**Restart the bot** for all changes to take full effect!",
+            inline=False
+        )
+        embed.set_footer(text="Previous data backed up automatically")
+        
+        await interaction.response.send_message(embed=embed)
+        await log_action(
+            interaction.guild,
+            "📥 Data Restored",
+            f"{interaction.user.mention} restored squad data from file: {file.filename}"
+        )
+        
+    except json.JSONDecodeError:
+        await interaction.response.send_message("❌ Invalid JSON file! Make sure the file is valid JSON.", ephemeral=True)
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Error restoring data: {e}", ephemeral=True)
+
+# -------------------- SQUAD SELECTOR & HELPER FUNCTIONS --------------------
+
+class SquadSelectorView(View):
+    """Universal squad selector dropdown for rivalry and match history"""
+    def __init__(self, purpose, step=1, selected_squad1=None, page=1):
+        super().__init__(timeout=180)
+        self.purpose = purpose  # "rivalry" or "history"
+        self.step = step
+        self.selected_squad1 = selected_squad1
+        self.page = page
+        
+        # Get squads for this page (25 per page due to Discord limit)
+        all_squads = sorted(SQUADS.items())
+        start_idx = (page - 1) * 25
+        end_idx = start_idx + 25
+        page_squads = all_squads[start_idx:end_idx]
+        
+        # Create dropdown options
+        options = [
+            discord.SelectOption(
+                label=squad_name,
+                value=squad_name,
+                emoji="🏰",
+                description=f"Tag: {tag}"
+            )
+            for squad_name, tag in page_squads
+        ]
+        
+        # Set placeholder based on purpose
+        placeholder_map = {
+            ("rivalry", 1): "⚔️ Select first kingdom...",
+            ("rivalry", 2): "⚔️ Select second kingdom...",
+            ("history", 1): "📜 Select kingdom to view match history..."
+        }
+        placeholder = placeholder_map.get((purpose, step), "Select a kingdom...")
+        
+        select = Select(placeholder=placeholder, options=options)
+        select.callback = self.squad_selected
+        self.add_item(select)
+        
+        # Add pagination buttons if needed
+        if len(all_squads) > 25:
+            if page > 1:
+                prev_btn = Button(label="← Previous", style=discord.ButtonStyle.secondary)
+                prev_btn.callback = self.prev_page
+                self.add_item(prev_btn)
+            if end_idx < len(all_squads):
+                next_btn = Button(label="Next →", style=discord.ButtonStyle.secondary)
+                next_btn.callback = self.next_page
+                self.add_item(next_btn)
+    
+    async def prev_page(self, interaction):
+        view = SquadSelectorView(self.purpose, self.step, self.selected_squad1, self.page - 1)
+        await interaction.response.edit_message(view=view)
+    
+    async def next_page(self, interaction):
+        view = SquadSelectorView(self.purpose, self.step, self.selected_squad1, self.page + 1)
+        await interaction.response.edit_message(view=view)
+    
+    async def squad_selected(self, interaction):
+        selected = interaction.data["values"][0]
+        
+        if self.purpose == "rivalry":
+            if self.step == 1:
+                # Show squad 2 selector
+                view = SquadSelectorView("rivalry", step=2, selected_squad1=selected)
+                embed = discord.Embed(
+                    title="⚔️ Kingdom Rivalry",
+                    description=f"✅ First Kingdom: **{SQUADS[selected]} {selected}**\n\nNow select the second kingdom:",
+                    color=ROYAL_BLUE
+                )
+                await interaction.response.edit_message(embed=embed, view=view)
+            else:
+                # Show rivalry stats
+                await show_rivalry_stats(interaction, self.selected_squad1, selected)
+        
+        elif self.purpose == "history":
+            # Show squad match history
+            await show_squad_match_history(interaction, selected)
+
+async def show_rivalry_stats(interaction, squad1, squad2):
+    """Display rivalry statistics between two squads"""
     if squad1 == squad2:
-        await interaction.response.send_message("❌ A kingdom cannot rival itself!", ephemeral=True)
+        await interaction.response.edit_message(
+            content="❌ A kingdom cannot rival itself!",
+            embed=None,
+            view=None
+        )
         return
     
     h2h = get_head_to_head(squad1, squad2)
     
     if h2h["total"] == 0:
-        await interaction.response.send_message(
-            f"⚔️ **{squad1}** and **{squad2}** have not yet clashed in battle!",
-            ephemeral=True
+        embed = discord.Embed(
+            title="⚔️ Kingdom Rivalry",
+            description=f"**{SQUADS[squad1]} {squad1}** and **{SQUADS[squad2]} {squad2}** have not yet clashed in battle!",
+            color=ROYAL_BLUE
         )
+        await interaction.response.edit_message(embed=embed, view=None)
         return
     
     # Determine dominant squad
@@ -2527,8 +2710,103 @@ async def rivalry_command(interaction: discord.Interaction, squad1: str, squad2:
         )
     
     embed.set_footer(text="⚜️ May the best kingdom prevail!")
+    await interaction.response.edit_message(embed=embed, view=None)
+
+async def show_squad_match_history(interaction, squad_name):
+    """Show recent match history for a squad"""
+    squad_matches = [
+        m for m in squad_data["matches"]
+        if m["team1"] == squad_name or m["team2"] == squad_name
+    ]
     
-    await interaction.response.send_message(embed=embed)
+    if not squad_matches:
+        embed = discord.Embed(
+            title=f"📜 {squad_name} Match History",
+            description="⚜️ This kingdom has not yet entered battle!",
+            color=ROYAL_BLUE
+        )
+        await interaction.response.edit_message(embed=embed, view=None)
+        return
+    
+    # Show last 10 matches (newest first)
+    recent = squad_matches[-10:][::-1]
+    
+    embed = discord.Embed(
+        title=f"📜 {SQUADS[squad_name]} {squad_name} Match History",
+        description=f"⚜️ Last {len(recent)} battles",
+        color=ROYAL_BLUE
+    )
+    
+    for match in recent:
+        team1 = match["team1"]
+        team2 = match["team2"]
+        score = match["score"]
+        match_id = match.get("match_id", "N/A")
+        
+        try:
+            dt = datetime.fromisoformat(match.get("date", ""))
+            date_str = dt.strftime("%b %d, %Y")
+        except:
+            date_str = "Unknown"
+        
+        # Determine result for this squad
+        try:
+            score1, score2 = map(int, score.split('-'))
+            if team1 == squad_name:
+                if score1 > score2:
+                    result_emoji, result_text = "🏆", "Victory"
+                elif score2 > score1:
+                    result_emoji, result_text = "💀", "Defeat"
+                else:
+                    result_emoji, result_text = "⚖️", "Draw"
+            else:
+                if score2 > score1:
+                    result_emoji, result_text = "🏆", "Victory"
+                elif score1 > score2:
+                    result_emoji, result_text = "💀", "Defeat"
+                else:
+                    result_emoji, result_text = "⚖️", "Draw"
+        except:
+            result_emoji, result_text = "⚔️", "Battle"
+        
+        embed.add_field(
+            name=f"{result_emoji} {SQUADS[team1]} vs {SQUADS[team2]} - {result_text}",
+            value=f"**{team1}** {score} **{team2}**\n📅 {date_str} • 🆔 `{match_id}`",
+            inline=False
+        )
+    
+    footer_text = f"⚜️ Showing last 10 of {len(squad_matches)} total battles" if len(squad_matches) > 10 else "⚜️ Glory to the warriors!"
+    embed.set_footer(text=footer_text)
+    
+    await interaction.response.edit_message(embed=embed, view=None)
+
+# -------------------- SLASH COMMANDS --------------------
+
+@bot.tree.command(name="rivalry", description="⚔️ View head-to-head stats between two kingdoms")
+async def rivalry_command(interaction: discord.Interaction):
+    """Show rivalry stats using dropdown selector - NO MORE TYPING!"""
+    view = SquadSelectorView(purpose="rivalry", step=1)
+    
+    embed = discord.Embed(
+        title="⚔️ Kingdom Rivalry",
+        description="Select the first kingdom to compare:",
+        color=ROYAL_BLUE
+    )
+    
+    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+@bot.tree.command(name="squad_history", description="📜 View recent match history for a kingdom")
+async def squad_history_command(interaction: discord.Interaction):
+    """Show squad match history using dropdown selector"""
+    view = SquadSelectorView(purpose="history", step=1)
+    
+    embed = discord.Embed(
+        title="📜 Kingdom Match History",
+        description="Select a kingdom to view their recent battles:",
+        color=ROYAL_BLUE
+    )
+    
+    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 @bot.tree.command(name="fun_stats", description="🎲 View fun statistics and trivia about the realm")
 async def fun_stats_command(interaction: discord.Interaction):
