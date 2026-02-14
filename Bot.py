@@ -2505,6 +2505,7 @@ async def download_data(interaction: discord.Interaction):
 @bot.tree.command(name="restore_data", description="📥 Restore squad data from JSON file (Moderator)")
 async def restore_data(interaction: discord.Interaction, file: discord.Attachment):
     """Restore squad_data.json from uploaded file (moderator only)"""
+    global squad_data
     if not is_moderator(interaction.user):
         await interaction.response.send_message("❌ Only royal moderators may restore data.", ephemeral=True)
         return
@@ -2533,7 +2534,6 @@ async def restore_data(interaction: discord.Interaction, file: discord.Attachmen
             json.dump(data_obj, f, indent=2)
         
         # Reload data into memory
-        global squad_data
         squad_data = load_data()
         
         embed = discord.Embed(
