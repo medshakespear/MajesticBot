@@ -2060,7 +2060,7 @@ async def safety_sync():
 # -------------------- SLASH COMMANDS --------------------
 
 # MEMBER COMMANDS
-@bot.tree.command(name="Majestic_members", description="👥 Access member panel - Browse kingdoms, rankings, and manage your profile")
+@bot.tree.command(name="majestic_members", description="👥 Access member panel - Browse kingdoms, rankings, and manage your profile")
 async def members_panel(interaction: discord.Interaction):
     view = MemberPanelView()
     
@@ -2111,7 +2111,7 @@ async def members_panel(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, view=view)
 
 
-@bot.tree.command(name="Majestic_help", description="📜 View all available commands and their usage")
+@bot.tree.command(name="majestic_help", description="📜 View all available commands and their usage")
 async def help_command(interaction: discord.Interaction):
     view = HelpCategoryView()
     
@@ -2140,7 +2140,7 @@ async def help_command(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 # LEADER COMMANDS
-@bot.tree.command(name="Majestic_leaders", description="👑 Open leader panel to manage your kingdom")
+@bot.tree.command(name="majestic_leaders", description="👑 Open leader panel to manage your kingdom")
 async def leader_panel(interaction: discord.Interaction):
     if not is_leader(interaction.user):
         await interaction.response.send_message("❌ Only royal leaders may access this chamber.", ephemeral=True)
