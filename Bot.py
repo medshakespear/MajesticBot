@@ -759,8 +759,8 @@ class AddMatchModal(Modal, title="⚔️ Record Battle Result"):
             "score": self.result.value,
             "date": datetime.utcnow().isoformat(),
             "added_by": interaction.user.id,
-            "team1_participants": team1_participants,  # NEW: Track who played
-            "team2_participants": team2_participants   # NEW: Track who played
+            "team1_participants": team1_participants,
+            "team2_participants": team2_participants
         }
         
         squad_data["matches"].append(match_data)
@@ -850,6 +850,189 @@ class SetLogoModal(Modal, title="🖼️ Set Royal Emblem"):
             interaction.guild,
             "🖼️ Emblem Updated",
             f"{interaction.user.mention} updated the royal emblem for **{self.squad_name}**"
+        )
+
+class AddTitleModal(Modal, title="🏆 Award Championship Title"):
+    squad_name = TextInput(
+        label="Kingdom Name",
+        placeholder="Enter exact squad name",
+        required=True
+    )
+    
+    title = TextInput(
+        label="Title Name",
+        placeholder="e.g., Champion, Tournament Winner",
+        required=True
+    )
+    
+    position = TextInput(
+        label="Position",
+        placeholder="e.g., 1st, 2nd, 3rd",
+        required=True,
+        max_length=10
+    )
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        if self.squad_name.value not in SQUADS:
+            await interaction.response.send_message(
+                f"❌ Kingdom `{self.squad_name.value}` not found. Use exact squad name.",
+                ephemeral=True
+            )
+            return
+        
+        squad_info = squad_data["squads"][self.squad_name.value]
+        
+        # Format the title with position
+        full_title = f"{self.title.value} ({self.position.value} Place)"
+        
+        # Add title to list
+        if "titles" not in squad_info:
+            squad_info["titles"] = []
+        
+        squad_info["titles"].append(full_title)
+        
+        # Increment championship wins for 1st place
+        if self.position.value.lower() in ["1st", "first", "1"]:
+            squad_info["championship_wins"] = squad_info.get("championship_wins", 0) + 1
+        
+        save_data(squad_data)
+        
+        # Determine emoji based on position
+        position_emoji = "🥇" if self.position.value.lower() in ["1st", "first", "1"] else "🥈" if self.position.value.lower() in ["2nd", "second", "2"] else "🥉"
+        
+        embed = discord.Embed(
+            title="🏆 Royal Title Bestowed",
+            description=f"{position_emoji} **{self.squad_name.value}** has been awarded the title:\n\n**{full_title}**",
+            color=ROYAL_GOLD
+        )
+        
+        if self.position.value.lower() in ["1st", "first", "1"]:
+            embed.add_field(
+                name="👑 Championship Glory",
+                value=f"Total Championships: **{squad_info['championship_wins']}**",
+                inline=False
+            )
+        
+        await interaction.response.send_message(embed=embed)
+        await log_action(
+            interaction.guild,
+            "🏆 Title Awarded",
+            f"{interaction.user.mention} awarded **{self.squad_name.value}** the title: {full_title}"
+        )
+
+class DeleteMatchModal(Modal, title="🗑️ Delete Match Result"):
+    match_id = TextInput(
+        label="Match ID",
+        placeholder="Enter the match ID to delete",
+        required=True,
+        max_length=8
+    )
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        index, match = find_match_by_id(self.match_id.value)
+        
+        if match is None:
+            await interaction.response.send_message(
+                f"❌ Match with ID `{self.match_id.value}` not found.",
+                ephemeral=True
+            )
+            return
+        
+        team1 = match["team1"]
+        team2 = match["team2"]
+        score = match["score"]
+        
+        try:
+            score1, score2 = map(int, score.split('-'))
+        except:
+            await interaction.response.send_message("❌ Invalid match data.", ephemeral=True)
+            return
+        
+        # Reverse the match results
+        team1_data = squad_data["squads"][team1]
+        team2_data = squad_data["squads"][team2]
+        
+        if score1 > score2:
+            team1_data["wins"] -= 1
+            team1_data["points"] -= 2
+            team2_data["losses"] -= 1
+        elif score2 > score1:
+            team2_data["wins"] -= 1
+            team2_data["points"] -= 2
+            team1_data["losses"] -= 1
+        else:
+            team1_data["draws"] -= 1
+            team1_data["points"] -= 1
+            team2_data["draws"] -= 1
+            team2_data["points"] -= 1
+        
+        # Remove from main matches list
+        squad_data["matches"].pop(index)
+        
+        # Remove from team match histories
+        team1_data["match_history"] = [m for m in team1_data["match_history"] if m.get("match_id") != self.match_id.value]
+        team2_data["match_history"] = [m for m in team2_data["match_history"] if m.get("match_id") != self.match_id.value]
+        
+        # Recalculate streaks from scratch for both teams
+        def recalculate_streak(squad_name):
+            """Recalculate current streak from match history"""
+            history = squad_data["squads"][squad_name].get("match_history", [])
+            if not history:
+                return {"type": "none", "count": 0}
+            
+            # Get results in chronological order
+            results = []
+            for match in history:
+                if match["team1"] == squad_name:
+                    s1, s2 = map(int, match["score"].split('-'))
+                    if s1 > s2:
+                        results.append("win")
+                    elif s1 < s2:
+                        results.append("loss")
+                    else:
+                        results.append("draw")
+                else:
+                    s1, s2 = map(int, match["score"].split('-'))
+                    if s2 > s1:
+                        results.append("win")
+                    elif s2 < s1:
+                        results.append("loss")
+                    else:
+                        results.append("draw")
+            
+            # Count current streak from most recent
+            if not results:
+                return {"type": "none", "count": 0}
+            
+            current_type = results[-1]
+            count = 1
+            for i in range(len(results) - 2, -1, -1):
+                if results[i] == current_type:
+                    count += 1
+                else:
+                    break
+            
+            return {"type": current_type, "count": count}
+        
+        team1_data["current_streak"] = recalculate_streak(team1)
+        team2_data["current_streak"] = recalculate_streak(team2)
+        
+        save_data(squad_data)
+        
+        embed = discord.Embed(
+            title="🗑️ Match Deleted",
+            description=f"⚜️ Match between **{team1}** and **{team2}** has been erased from the chronicles.",
+            color=ROYAL_RED
+        )
+        embed.add_field(name="Match ID", value=f"`{self.match_id.value}`", inline=True)
+        embed.add_field(name="Score", value=score, inline=True)
+        embed.set_footer(text="Points and records have been adjusted")
+        
+        await interaction.response.send_message(embed=embed)
+        await log_action(
+            interaction.guild,
+            "🗑️ Match Deleted",
+            f"{interaction.user.mention} deleted match {self.match_id.value}: {team1} vs {team2} ({score})"
         )
 
 # -------------------- VIEWS --------------------
@@ -1144,7 +1327,7 @@ async def show_player_profile(interaction, member: discord.Member, public=False)
         )
         embed.add_field(
             name="💡 How to Create Your Profile",
-            value="Use `/majestic_members` → Click **'Setup Profile'** to create your warrior profile!\n\nYou can setup your profile even without joining a squad!",
+            value="Use `/panel` → Click **'Setup Profile'** to create your warrior profile!\n\nYou can setup your profile even without joining a squad!",
             inline=False
         )
         embed.set_thumbnail(url=member.display_avatar.url)
@@ -1261,7 +1444,7 @@ async def show_player_profile(interaction, member: discord.Member, public=False)
     
     # Set member avatar as thumbnail
     embed.set_thumbnail(url=member.display_avatar.url)
-    embed.set_footer(text="⚜️ Glory to the warrior | Use /majestic_members → Setup Profile to update")
+    embed.set_footer(text="⚜️ Glory to the warrior | Use /panel → Setup Profile to update")
     
     await interaction.response.send_message(embed=embed, ephemeral=not public)
 
@@ -1304,145 +1487,45 @@ class HelpCategoryView(View):
         if category == "member":
             embed = discord.Embed(
                 title="👥 Member Commands",
-                description="*Commands available to all Royal warriors*",
+                description="*Main panel with all features accessible via buttons*",
                 color=ROYAL_BLUE
             )
             embed.add_field(
-                name="/majestic_members",
-                value="📖 Open the member panel to browse squads, view rankings, setup your profile, and manage your squad membership\n*Example: `/majestic_members`*",
+                name="/panel",
+                value="📖 Opens the main member panel with buttons for:\n• Browse Kingdoms\n• View Rankings\n• My Kingdom\n• My Profile\n• Setup Profile\n• View Rivalry\n• Match History\n• Fun Stats\n• Leave Kingdom\n\n*All features are button-based - no typing required!*",
                 inline=False
             )
             embed.add_field(
-                name="/profile @user (optional)",
-                value="🎭 View a warrior's profile publicly. Leave blank to view your own.\n*Example: `/profile` or `/profile @JohnDoe`*",
-                inline=False
-            )
-            embed.add_field(
-                name="/rivalry",
-                value="⚔️ View head-to-head battle statistics (uses dropdown selector)\n*Example: `/rivalry`*",
-                inline=False
-            )
-            embed.add_field(
-                name="/squad_history",
-                value="📜 View recent match history for any kingdom (uses dropdown selector)\n*Example: `/squad_history`*",
-                inline=False
-            )
-            embed.add_field(
-                name="/fun_stats",
-                value="🎲 View interesting statistics and trivia about the realm\n*Example: `/fun_stats`*",
-                inline=False
-            )
-            embed.add_field(
-                name="/majestic_help",
-                value="📜 Display this help guide\n*Example: `/majestic_help`*",
+                name="/profile @user",
+                value="🎭 View any warrior's profile publicly\n*Example: `/profile @JohnDoe`*",
                 inline=False
             )
             
         elif category == "leader":
             embed = discord.Embed(
                 title="👑 Leader Commands",
-                description="*Commands for managing your royal kingdom*",
+                description="*Main panel with all management features*",
                 color=ROYAL_GOLD
             )
             embed.add_field(
-                name="/majestic_leaders",
-                value="📖 Open the leader panel (includes Set Logo button)\n*Example: `/majestic_leaders`*",
-                inline=False
-            )
-            embed.add_field(
-                name="/add_member @user",
-                value="➕ Recruit a warrior to your kingdom\n*Example: `/add_member @JohnDoe`*",
-                inline=False
-            )
-            embed.add_field(
-                name="/remove_member @user",
-                value="➖ Remove a warrior from your kingdom\n*Example: `/remove_member @JohnDoe`*",
-                inline=False
-            )
-            embed.add_field(
-                name="/set_main @user",
-                value="⭐ Add a warrior to the elite main roster (max 5)\n*Example: `/set_main @JohnDoe`*",
-                inline=False
-            )
-            embed.add_field(
-                name="/remove_main @user",
-                value="⭐ Remove a warrior from the main roster\n*Example: `/remove_main @JohnDoe`*",
-                inline=False
-            )
-            embed.add_field(
-                name="/set_sub @user",
-                value="🔄 Add a warrior to the reserve substitutes (max 3)\n*Example: `/set_sub @JohnDoe`*",
-                inline=False
-            )
-            embed.add_field(
-                name="/remove_sub @user",
-                value="🔄 Remove a warrior from substitutes\n*Example: `/remove_sub @JohnDoe`*",
-                inline=False
-            )
-            embed.add_field(
-                name="/promote_leader @user",
-                value="👑 Bestow leadership upon a worthy warrior\n*Example: `/promote_leader @JohnDoe`*",
-                inline=False
-            )
-            embed.add_field(
-                name="/give_guest @user",
-                value="🎭 Grant guest privileges to a visitor\n*Example: `/give_guest @JohnDoe`*",
-                inline=False
-            )
-            embed.add_field(
-                name="/remove_guest @user",
-                value="🧹 Revoke guest privileges\n*Example: `/remove_guest @JohnDoe`*",
+                name="/leader_panel",
+                value="📖 Opens the leader panel with buttons for:\n• Add Member\n• Remove Member\n• Set Main Roster (max 5)\n• Remove from Mains\n• Set Substitute (max 3)\n• Remove from Subs\n• Promote Leader\n• Give Guest\n• Remove Guest\n• Set Logo\n• View Kingdom\n\n*All features are button-based!*",
                 inline=False
             )
             
         else:  # moderator
             embed = discord.Embed(
                 title="🛡️ Moderator Commands",
-                description="*Commands for overseeing the realm*",
+                description="*Main panel with all moderation features*",
                 color=ROYAL_PURPLE
             )
             embed.add_field(
-                name="/moderator",
-                value="📖 Open the moderator panel to add match results\n*Example: `/moderator`*",
-                inline=False
-            )
-            embed.add_field(
-                name="/add_title squad_name title position",
-                value="🏆 Award a title to a kingdom (position: 1st, 2nd, 3rd, etc.)\n*Example: `/add_title ROYALS Champion 1st`*",
-                inline=False
-            )
-            embed.add_field(
-                name="/set_squad_logo squad_name logo_url",
-                value="🖼️ Set the royal emblem for any kingdom\n*Example: `/set_squad_logo ROYALS https://i.imgur.com/example.png`*",
-                inline=False
-            )
-            embed.add_field(
-                name="/delete_match match_id",
-                value="🗑️ Delete a match result (get match ID from match recording)\n*Example: `/delete_match a1b2c3d4`*",
-                inline=False
-            )
-            embed.add_field(
-                name="/recent_matches limit",
-                value="📜 View recent match results with IDs\n*Example: `/recent_matches 10`*",
-                inline=False
-            )
-            embed.add_field(
-                name="/clear_history @user",
-                value="🗑️ Clear a player's squad history permanently\n*Example: `/clear_history @JohnDoe`*",
-                inline=False
-            )
-            embed.add_field(
-                name="/download_data",
-                value="💾 Download complete data backup as JSON file\n*Example: `/download_data`*",
-                inline=False
-            )
-            embed.add_field(
-                name="/restore_data file",
-                value="📥 Restore data from uploaded JSON backup file\n*Example: `/restore_data` (attach file)*",
+                name="/mod_panel",
+                value="📖 Opens the moderator panel with buttons for:\n• Record Battle\n• Award Title\n• Delete Match\n• Recent Matches\n• Clear History\n• Download Backup\n\n*All features are button-based!*",
                 inline=False
             )
         
-        embed.set_footer(text="⚜️ Royal Command Archives")
+        embed.set_footer(text="⚜️ Royal Command Archives | Everything is button-based!")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 class RankingsView(View):
@@ -1513,7 +1596,7 @@ class MemberPanelView(View):
             description="⚜️ Select a kingdom from the dropdown to view their Royal house!",
             color=ROYAL_BLUE
         )
-        await interaction.response.send_message(embed=embed, view=view)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
     
     @discord.ui.button(label="Rankings", style=discord.ButtonStyle.secondary, emoji="🏆", row=0)
     async def rankings_button(self, interaction: discord.Interaction, button: Button):
@@ -1541,9 +1624,9 @@ class MemberPanelView(View):
         
         # Create view with pagination if needed
         view = RankingsView(page=1) if total_pages > 1 else None
-        await interaction.response.send_message(embed=embed, view=view)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
     
-    @discord.ui.button(label="My Kingdom", style=discord.ButtonStyle.success, emoji="🛡️", row=1)
+    @discord.ui.button(label="My Kingdom", style=discord.ButtonStyle.success, emoji="🛡️", row=0)
     async def my_squad_button(self, interaction: discord.Interaction, button: Button):
         role, tag = get_member_squad(interaction.user, interaction.guild)
         if not role:
@@ -1554,11 +1637,10 @@ class MemberPanelView(View):
     
     @discord.ui.button(label="My Profile", style=discord.ButtonStyle.success, emoji="🎭", row=1)
     async def my_profile_button(self, interaction: discord.Interaction, button: Button):
-        await show_player_profile(interaction, interaction.user, public=True)
+        await show_player_profile(interaction, interaction.user, public=False)
     
-    @discord.ui.button(label="Setup Profile", style=discord.ButtonStyle.primary, emoji="⚙️", row=2)
+    @discord.ui.button(label="Setup Profile", style=discord.ButtonStyle.primary, emoji="⚙️", row=1)
     async def setup_profile_button(self, interaction: discord.Interaction, button: Button):
-        # CHANGE 1: Allow all members to setup profiles, not just squad members
         role, _ = get_member_squad(interaction.user, interaction.guild)
         squad_name = role.name if role else "Free Agent"
         
@@ -1570,7 +1652,31 @@ class MemberPanelView(View):
         )
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
     
-    @discord.ui.button(label="Leave Kingdom", style=discord.ButtonStyle.danger, emoji="🚪", row=2)
+    @discord.ui.button(label="View Rivalry", style=discord.ButtonStyle.secondary, emoji="⚔️", row=2)
+    async def rivalry_button(self, interaction: discord.Interaction, button: Button):
+        view = SquadSelectorView(purpose="rivalry", step=1)
+        embed = discord.Embed(
+            title="⚔️ Kingdom Rivalry",
+            description="Select the first kingdom to compare:",
+            color=ROYAL_BLUE
+        )
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
+    @discord.ui.button(label="Match History", style=discord.ButtonStyle.secondary, emoji="📜", row=2)
+    async def history_button(self, interaction: discord.Interaction, button: Button):
+        view = SquadSelectorView(purpose="history", step=1)
+        embed = discord.Embed(
+            title="📜 Kingdom Match History",
+            description="Select a kingdom to view their recent battles:",
+            color=ROYAL_BLUE
+        )
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
+    @discord.ui.button(label="Fun Stats", style=discord.ButtonStyle.secondary, emoji="🎲", row=2)
+    async def fun_stats_button(self, interaction: discord.Interaction, button: Button):
+        await show_fun_stats(interaction)
+    
+    @discord.ui.button(label="Leave Kingdom", style=discord.ButtonStyle.danger, emoji="🚪", row=3)
     async def leave_squad_button(self, interaction: discord.Interaction, button: Button):
         role, _ = get_member_squad(interaction.user, interaction.guild)
         if not role:
@@ -1656,6 +1762,13 @@ class MemberSelectorView(View):
             # Show all guild members
             members = [m for m in guild.members if not m.bot]
         
+        elif action == "clear_history":
+            # Show all members with profiles
+            members = []
+            for m in guild.members:
+                if not m.bot and str(m.id) in squad_data["players"]:
+                    members.append(m)
+        
         else:
             members = []
         
@@ -1687,7 +1800,8 @@ class MemberSelectorView(View):
             "remove_sub": "Select warrior to remove from subs...",
             "promote_leader": "👑 Select warrior to promote...",
             "give_guest": "🎭 Select person for guest role...",
-            "remove_guest": "Select person to remove guest..."
+            "remove_guest": "Select person to remove guest...",
+            "clear_history": "Select player to clear history..."
         }
         
         select = Select(
@@ -1743,6 +1857,8 @@ class MemberSelectorView(View):
             await self.handle_give_guest(interaction, member)
         elif self.action == "remove_guest":
             await self.handle_remove_guest(interaction, member)
+        elif self.action == "clear_history":
+            await self.handle_clear_history(interaction, member)
     
     async def handle_add_member(self, interaction, member):
         """Add member to squad"""
@@ -1945,11 +2061,70 @@ class MemberSelectorView(View):
         )
         await interaction.response.edit_message(embed=embed, view=None)
         await log_action(self.guild, "❌ Guest Removed", f"{interaction.user.mention} removed guest role from {member.mention}")
+    
+    async def handle_clear_history(self, interaction, member):
+        """Clear player's squad history"""
+        player_key = str(member.id)
+        
+        if player_key not in squad_data["players"]:
+            await interaction.response.edit_message(
+                content=f"❌ {member.mention} doesn't have a profile in the system.",
+                embed=None,
+                view=None
+            )
+            return
+        
+        player_data = squad_data["players"][player_key]
+        old_history = player_data.get("squad_history", [])
+        
+        if not old_history:
+            await interaction.response.edit_message(
+                content=f"ℹ️ {member.mention} has no squad history to clear.",
+                embed=None,
+                view=None
+            )
+            return
+        
+        # Clear the history
+        player_data["squad_history"] = []
+        save_data(squad_data)
+        
+        embed = discord.Embed(
+            title="🗑️ Squad History Cleared",
+            description=f"⚜️ Cleared squad history for {member.mention}",
+            color=ROYAL_PURPLE
+        )
+        embed.add_field(
+            name="📜 Squads Removed from History",
+            value=f"**{len(old_history)}** previous squad{'s' if len(old_history) != 1 else ''} cleared",
+            inline=False
+        )
+        
+        # List what was cleared
+        if old_history:
+            cleared_text = ""
+            for entry in old_history[:5]:
+                squad = entry.get("squad", "Unknown")
+                tag = SQUADS.get(squad, "?")
+                cleared_text += f"{tag} {squad}\n"
+            if len(old_history) > 5:
+                cleared_text += f"*...and {len(old_history) - 5} more*"
+            embed.add_field(name="Cleared Squads", value=cleared_text, inline=False)
+        
+        embed.set_thumbnail(url=member.display_avatar.url)
+        embed.set_footer(text="This action cannot be undone")
+        
+        await interaction.response.edit_message(embed=embed, view=None)
+        await log_action(
+            self.guild,
+            "🗑️ Squad History Cleared",
+            f"{interaction.user.mention} cleared squad history for {member.mention}"
+        )
 
 # -------------------- LEADER PANEL VIEW (Complete Button-Based) --------------------
 
 class LeaderPanelView(View):
-    """Complete button-based leader panel - NO SLASH COMMANDS NEEDED!"""
+    """Complete button-based leader panel"""
     def __init__(self, squad_role, tag: str, squad_name: str, guest_role):
         super().__init__(timeout=None)
         self.squad_role = squad_role
@@ -1971,7 +2146,7 @@ class LeaderPanelView(View):
     
     @discord.ui.button(label="View Kingdom", emoji="🏰", style=discord.ButtonStyle.primary, row=0)
     async def view_kingdom_button(self, interaction: discord.Interaction, button: Button):
-        await show_squad_info(interaction, self.squad_name)
+        await show_squad_info(interaction, self.squad_role, self.squad_name, self.tag, public=False)
     
     @discord.ui.button(label="Set Main Roster", emoji="⭐", style=discord.ButtonStyle.primary, row=1)
     async def set_main_button(self, interaction: discord.Interaction, button: Button):
@@ -2028,596 +2203,50 @@ class ModeratorPanelView(View):
     async def add_match_button(self, interaction: discord.Interaction, button: Button):
         modal = AddMatchModal()
         await interaction.response.send_modal(modal)
-
-# -------------------- READY --------------------
-@bot.event
-async def on_ready():
-    await bot.tree.sync()
-    safety_sync.start()
-    print(f"✅ Logged in as {bot.user}")
-    print(f"⚜️ Royal Squad Bot is ready to serve!")
     
-    for guild in bot.guilds:
-        for member in guild.members:
-            role, tag = get_member_squad(member, guild)
-            await safe_nick_update(member, role, tag)
+    @discord.ui.button(label="Award Title", style=discord.ButtonStyle.success, emoji="🏆", row=0)
+    async def add_title_button(self, interaction: discord.Interaction, button: Button):
+        modal = AddTitleModal()
+        await interaction.response.send_modal(modal)
     
-    print("✅ Initial sync done")
-
-# -------------------- INSTANT ROLE SYNC --------------------
-@bot.event
-async def on_member_update(before, after):
-    role, tag = get_member_squad(after, after.guild)
-    await bot.wait_until_ready()
-    await safe_nick_update(after, role, tag)
-
-# -------------------- SAFETY SYNC --------------------
-@tasks.loop(minutes=5)
-async def safety_sync():
-    for guild in bot.guilds:
-        for member in guild.members:
-            role, tag = get_member_squad(member, guild)
-            await safe_nick_update(member, role, tag)
-
-# -------------------- SLASH COMMANDS --------------------
-
-# MEMBER COMMANDS
-@bot.tree.command(name="majestic_members", description="👥 Access member panel - Browse kingdoms, rankings, and manage your profile")
-async def members_panel(interaction: discord.Interaction):
-    view = MemberPanelView()
+    @discord.ui.button(label="Delete Match", style=discord.ButtonStyle.danger, emoji="🗑️", row=0)
+    async def delete_match_button(self, interaction: discord.Interaction, button: Button):
+        modal = DeleteMatchModal()
+        await interaction.response.send_modal(modal)
     
-    # Get quick stats
-    total_squads = len(SQUADS)
-    total_matches = len(squad_data["matches"])
-    rankings = get_squad_ranking()
-    top_squad = rankings[0] if rankings else None
+    @discord.ui.button(label="Recent Matches", style=discord.ButtonStyle.secondary, emoji="📜", row=1)
+    async def recent_matches_button(self, interaction: discord.Interaction, button: Button):
+        await show_recent_matches(interaction, limit=10)
     
-    # Get user's squad if they have one
-    user_role, user_tag = get_member_squad(interaction.user, interaction.guild)
-    user_squad_text = f"\n\n🛡️ **Your Kingdom:** {user_tag} {user_role.name}" if user_role else "\n\n⚔️ **Status:** Free Agent"
-    
-    embed = discord.Embed(
-        title="👥 Royal Member Hall",
-        description=f"⚜️ *Welcome to the royal chambers, {interaction.user.display_name}.*{user_squad_text}",
-        color=ROYAL_BLUE
-    )
-    
-    # Realm stats
-    embed.add_field(
-        name="🌟 Realm Overview",
-        value=(
-            f"🏰 **{total_squads}** Noble Kingdoms\n"
-            f"⚔️ **{total_matches}** Epic Battles\n" +
-            (f"👑 Leading: **{top_squad['name']}** ({top_squad['points']} pts)" if top_squad else "")
-        ),
-        inline=False
-    )
-    
-    embed.add_field(
-        name="📜 Available Actions",
-        value=(
-            "🏰 **Browse Kingdoms** - Explore all royal houses\n"
-            "🏆 **Rankings** - View the leaderboard\n"
-            "🛡️ **My Kingdom** - Your current allegiance\n"
-            "🎭 **My Profile** - View your warrior profile\n"
-            "⚙️ **Setup Profile** - Update your information\n"
-            "🚪 **Leave Kingdom** - Depart from your squad"
-        ),
-        inline=False
-    )
-    
-    embed.set_footer(text="⚜️ May honor guide your path | Use buttons below to navigate")
-    embed.set_thumbnail(url=interaction.user.display_avatar.url)
-    
-    # CHANGE 2: Make member panel visible to everyone
-    await interaction.response.send_message(embed=embed, view=view)
-
-@bot.tree.command(name="profile", description="🎭 View a warrior's profile (leave blank for your own)")
-async def profile_command(interaction: discord.Interaction, member: Optional[discord.Member] = None):
-    target = member or interaction.user
-    await show_player_profile(interaction, target, public=True)
-
-@bot.tree.command(name="majestic_help", description="📜 View all available commands and their usage")
-async def help_command(interaction: discord.Interaction):
-    view = HelpCategoryView()
-    
-    embed = discord.Embed(
-        title="📜 Royal Command Archives",
-        description="⚜️ *Select a category below to view available commands*",
-        color=ROYAL_PURPLE
-    )
-    embed.add_field(
-        name="👥 Member Commands",
-        value="Commands available to all warriors",
-        inline=False
-    )
-    embed.add_field(
-        name="👑 Leader Commands",
-        value="Commands for managing your kingdom",
-        inline=False
-    )
-    embed.add_field(
-        name="🛡️ Moderator Commands",
-        value="Commands for tournament overseers",
-        inline=False
-    )
-    embed.set_footer(text="⚜️ Knowledge is power")
-    
-    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-
-# LEADER COMMANDS
-@bot.tree.command(name="majestic_leaders", description="👑 Open leader panel to manage your kingdom")
-async def leader_panel(interaction: discord.Interaction):
-    if not is_leader(interaction.user):
-        await interaction.response.send_message("❌ Only royal leaders may access this chamber.", ephemeral=True)
-        return
-    
-    squad_role, tag = get_member_squad(interaction.user, interaction.guild)
-    if not squad_role:
-        await interaction.response.send_message("❌ You must be sworn to a kingdom.", ephemeral=True)
-        return
-    
-    guest_role_name = GUEST_ROLES.get(squad_role.name)
-    guest_role = discord.utils.get(interaction.guild.roles, name=guest_role_name) if guest_role_name else None
-    
-    view = LeaderPanelView(squad_role, tag, squad_role.name, guest_role)
-    
-    embed = discord.Embed(
-        title=f"👑 Royal Leadership Chamber - {squad_role.name}",
-        description="⚜️ *Manage your kingdom with the buttons below*\n\n**All actions are now button-based - no typing needed!**",
-        color=squad_role.color if squad_role.color != discord.Color.default() else ROYAL_GOLD
-    )
-    embed.add_field(
-        name="🎯 Available Actions",
-        value=(
-            "➕ **Add/Remove Members** - Recruit or dismiss warriors\n"
-            "⭐ **Manage Rosters** - Set main roster and substitutes (5 mains, 3 subs)\n"
-            "👑 **Promote Leaders** - Bestow leadership upon worthy warriors\n"
-            "🎭 **Guest Access** - Manage guest privileges\n"
-            "🖼️ **Set Logo** - Update your royal emblem\n"
-            "🏰 **View Kingdom** - See your kingdom details and history"
-        ),
-        inline=False
-    )
-    embed.set_footer(text="⚜️ Lead with honor and wisdom | Use buttons below")
-    
-    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-
-# -------------------- OLD LEADER COMMANDS REMOVED --------------------
-# All leader commands are now button-based in LeaderPanelView!
-# No more: /add_member, /remove_member, /set_main, /remove_main, /set_sub, /remove_sub, /promote_leader, /give_guest, /remove_guest
-
-# -------------------- MODERATOR COMMANDS --------------------
-@bot.tree.command(name="moderator", description="🛡️ Open moderator panel to oversee the realm")
-async def moderator_panel(interaction: discord.Interaction):
-    if not is_moderator(interaction.user):
-        await interaction.response.send_message("❌ Only royal moderators may access this chamber.", ephemeral=True)
-        return
-    
-    view = ModeratorPanelView()
-    
-    embed = discord.Embed(
-        title="🛡️ Royal Overseer Chamber",
-        description="⚜️ *Manage the realm's tournaments and records*",
-        color=ROYAL_PURPLE
-    )
-    embed.add_field(
-        name="📜 Available Commands",
-        value=(
-            "⚔️ Record battle results (use button above)\n"
-            "`/add_title squad_name title position` - Award titles\n"
-            "`/set_squad_logo squad_name url` - Set kingdom emblems\n"
-            "`/delete_match match_id` - Delete a match result\n"
-            "`/recent_matches limit` - View recent matches with IDs"
-        ),
-        inline=False
-    )
-    embed.set_footer(text="⚜️ Govern with fairness and strength")
-    
-    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-
-@bot.tree.command(name="add_title", description="🏆 Award a championship title to a kingdom")
-async def add_title(
-    interaction: discord.Interaction,
-    squad_name: str,
-    title: str,
-    position: str
-):
-    if not is_moderator(interaction.user):
-        await interaction.response.send_message("❌ Only royal moderators may award titles.", ephemeral=True)
-        return
-    
-    if squad_name not in SQUADS:
-        await interaction.response.send_message(
-            f"❌ Kingdom `{squad_name}` not found. Use exact squad name.",
-            ephemeral=True
+    @discord.ui.button(label="Clear History", style=discord.ButtonStyle.danger, emoji="🗑️", row=1)
+    async def clear_history_button(self, interaction: discord.Interaction, button: Button):
+        view = MemberSelectorView("clear_history", guild=interaction.guild)
+        embed = discord.Embed(
+            title="🗑️ Clear Squad History",
+            description="Select a player to clear their squad history:",
+            color=ROYAL_RED
         )
-        return
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
     
-    squad_info = squad_data["squads"][squad_name]
-    
-    # Format the title with position
-    full_title = f"{title} ({position} Place)"
-    
-    # Add title to list
-    if "titles" not in squad_info:
-        squad_info["titles"] = []
-    
-    squad_info["titles"].append(full_title)
-    
-    # Increment championship wins for 1st place
-    if position.lower() in ["1st", "first", "1"]:
-        squad_info["championship_wins"] = squad_info.get("championship_wins", 0) + 1
-    
-    save_data(squad_data)
-    
-    # Determine emoji based on position
-    position_emoji = "🥇" if position.lower() in ["1st", "first", "1"] else "🥈" if position.lower() in ["2nd", "second", "2"] else "🥉"
-    
-    embed = discord.Embed(
-        title="🏆 Royal Title Bestowed",
-        description=f"{position_emoji} **{squad_name}** has been awarded the title:\n\n**{full_title}**",
-        color=ROYAL_GOLD
-    )
-    
-    if position.lower() in ["1st", "first", "1"]:
-        embed.add_field(
-            name="👑 Championship Glory",
-            value=f"Total Championships: **{squad_info['championship_wins']}**",
-            inline=False
-        )
-    
-    await interaction.response.send_message(embed=embed)
-    await log_action(
-        interaction.guild,
-        "🏆 Title Awarded",
-        f"{interaction.user.mention} awarded **{squad_name}** the title: {full_title}"
-    )
-
-@bot.tree.command(name="set_squad_logo", description="🖼️ Set the royal emblem for any kingdom")
-async def set_squad_logo(
-    interaction: discord.Interaction,
-    squad_name: str,
-    logo_url: str
-):
-    if not is_moderator(interaction.user):
-        await interaction.response.send_message("❌ Only royal moderators may set kingdom emblems.", ephemeral=True)
-        return
-    
-    if squad_name not in SQUADS:
-        await interaction.response.send_message(
-            f"❌ Kingdom `{squad_name}` not found. Use exact squad name.",
-            ephemeral=True
-        )
-        return
-    
-    squad_data["squads"][squad_name]["logo_url"] = logo_url
-    save_data(squad_data)
-    
-    embed = discord.Embed(
-        title="✅ Royal Emblem Established",
-        description=f"The crest of **{squad_name}** has been emblazoned!",
-        color=ROYAL_GOLD
-    )
-    embed.set_thumbnail(url=logo_url)
-    
-    await interaction.response.send_message(embed=embed)
-    await log_action(
-        interaction.guild,
-        "🖼️ Emblem Set",
-        f"{interaction.user.mention} set the royal emblem for **{squad_name}**"
-    )
-
-@bot.tree.command(name="delete_match", description="🗑️ Delete a match result by ID")
-async def delete_match(interaction: discord.Interaction, match_id: str):
-    if not is_moderator(interaction.user):
-        await interaction.response.send_message("❌ Only royal moderators may delete matches.", ephemeral=True)
-        return
-    
-    index, match = find_match_by_id(match_id)
-    
-    if match is None:
-        await interaction.response.send_message(f"❌ Match with ID `{match_id}` not found.", ephemeral=True)
-        return
-    
-    team1 = match["team1"]
-    team2 = match["team2"]
-    score = match["score"]
-    
-    try:
-        score1, score2 = map(int, score.split('-'))
-    except:
-        await interaction.response.send_message("❌ Invalid match data.", ephemeral=True)
-        return
-    
-    # Reverse the match results
-    team1_data = squad_data["squads"][team1]
-    team2_data = squad_data["squads"][team2]
-    
-    if score1 > score2:
-        team1_data["wins"] -= 1
-        team1_data["points"] -= 2
-        team2_data["losses"] -= 1
-    elif score2 > score1:
-        team2_data["wins"] -= 1
-        team2_data["points"] -= 2
-        team1_data["losses"] -= 1
-    else:
-        team1_data["draws"] -= 1
-        team1_data["points"] -= 1
-        team2_data["draws"] -= 1
-        team2_data["points"] -= 1
-    
-    # Remove from main matches list
-    squad_data["matches"].pop(index)
-    
-    # Remove from team match histories
-    team1_data["match_history"] = [m for m in team1_data["match_history"] if m.get("match_id") != match_id]
-    team2_data["match_history"] = [m for m in team2_data["match_history"] if m.get("match_id") != match_id]
-    
-    # Recalculate streaks from scratch for both teams
-    def recalculate_streak(squad_name):
-        """Recalculate current streak from match history"""
-        history = squad_data["squads"][squad_name].get("match_history", [])
-        if not history:
-            return {"type": "none", "count": 0}
-        
-        # Get results in chronological order
-        results = []
-        for match in history:
-            if match["team1"] == squad_name:
-                s1, s2 = map(int, match["score"].split('-'))
-                if s1 > s2:
-                    results.append("win")
-                elif s1 < s2:
-                    results.append("loss")
-                else:
-                    results.append("draw")
-            else:
-                s1, s2 = map(int, match["score"].split('-'))
-                if s2 > s1:
-                    results.append("win")
-                elif s2 < s1:
-                    results.append("loss")
-                else:
-                    results.append("draw")
-        
-        # Count current streak from most recent
-        if not results:
-            return {"type": "none", "count": 0}
-        
-        current_type = results[-1]
-        count = 1
-        for i in range(len(results) - 2, -1, -1):
-            if results[i] == current_type:
-                count += 1
-            else:
-                break
-        
-        return {"type": current_type, "count": count}
-    
-    team1_data["current_streak"] = recalculate_streak(team1)
-    team2_data["current_streak"] = recalculate_streak(team2)
-    
-    save_data(squad_data)
-    
-    embed = discord.Embed(
-        title="🗑️ Match Deleted",
-        description=f"⚜️ Match between **{team1}** and **{team2}** has been erased from the chronicles.",
-        color=ROYAL_RED
-    )
-    embed.add_field(name="Match ID", value=f"`{match_id}`", inline=True)
-    embed.add_field(name="Score", value=score, inline=True)
-    embed.set_footer(text="Points and records have been adjusted")
-    
-    await interaction.response.send_message(embed=embed)
-    await log_action(
-        interaction.guild,
-        "🗑️ Match Deleted",
-        f"{interaction.user.mention} deleted match {match_id}: {team1} vs {team2} ({score})"
-    )
-
-@bot.tree.command(name="recent_matches", description="📜 View recent match results")
-async def recent_matches(interaction: discord.Interaction, limit: int = 10):
-    if not is_moderator(interaction.user):
-        await interaction.response.send_message("❌ Only royal moderators may view match records.", ephemeral=True)
-        return
-    
-    if limit < 1 or limit > 25:
-        await interaction.response.send_message("❌ Limit must be between 1 and 25.", ephemeral=True)
-        return
-    
-    recent = squad_data["matches"][-limit:][::-1]  # Last N matches, reversed
-    
-    if not recent:
-        await interaction.response.send_message("📜 No matches recorded yet.", ephemeral=True)
-        return
-    
-    embed = discord.Embed(
-        title="📜 Recent Battle Chronicles",
-        description=f"⚜️ *Last {len(recent)} recorded battles*",
-        color=ROYAL_PURPLE
-    )
-    
-    for match in recent:
-        match_id = match.get("match_id", "unknown")
-        team1 = match["team1"]
-        team2 = match["team2"]
-        score = match["score"]
-        date = match.get("date", "Unknown date")
+    @discord.ui.button(label="Download Backup", style=discord.ButtonStyle.secondary, emoji="💾", row=2)
+    async def download_button(self, interaction: discord.Interaction, button: Button):
+        if not os.path.exists(DATA_FILE):
+            await interaction.response.send_message("❌ No data file found.", ephemeral=True)
+            return
         
         try:
-            dt = datetime.fromisoformat(date)
-            date_str = dt.strftime("%b %d, %Y %H:%M")
-        except:
-            date_str = "Unknown date"
-        
-        embed.add_field(
-            name=f"⚔️ {SQUADS.get(team1, '?')} vs {SQUADS.get(team2, '?')}",
-            value=f"**{team1}** {score} **{team2}**\n🆔 `{match_id}` • 📅 {date_str}",
-            inline=False
-        )
-    
-    embed.set_footer(text="Use /delete_match <match_id> to remove a match")
-    
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-@bot.tree.command(name="clear_history", description="🗑️ Clear a player's squad history (Moderator)")
-async def clear_history(interaction: discord.Interaction, member: discord.Member):
-    """Clear a player's squad history (moderator only)"""
-    if not is_moderator(interaction.user):
-        await interaction.response.send_message("❌ Only royal moderators may clear squad history.", ephemeral=True)
-        return
-    
-    player_key = str(member.id)
-    
-    if player_key not in squad_data["players"]:
-        await interaction.response.send_message(
-            f"❌ {member.mention} doesn't have a profile in the system.",
-            ephemeral=True
-        )
-        return
-    
-    player_data = squad_data["players"][player_key]
-    old_history = player_data.get("squad_history", [])
-    
-    if not old_history:
-        await interaction.response.send_message(
-            f"ℹ️ {member.mention} has no squad history to clear.",
-            ephemeral=True
-        )
-        return
-    
-    # Clear the history
-    player_data["squad_history"] = []
-    save_data(squad_data)
-    
-    embed = discord.Embed(
-        title="🗑️ Squad History Cleared",
-        description=f"⚜️ Cleared squad history for {member.mention}",
-        color=ROYAL_PURPLE
-    )
-    embed.add_field(
-        name="📜 Squads Removed from History",
-        value=f"**{len(old_history)}** previous squad{'s' if len(old_history) != 1 else ''} cleared",
-        inline=False
-    )
-    
-    # List what was cleared
-    if old_history:
-        cleared_text = ""
-        for entry in old_history[:5]:
-            squad = entry.get("squad", "Unknown")
-            tag = SQUADS.get(squad, "?")
-            cleared_text += f"{tag} {squad}\n"
-        if len(old_history) > 5:
-            cleared_text += f"*...and {len(old_history) - 5} more*"
-        embed.add_field(name="Cleared Squads", value=cleared_text, inline=False)
-    
-    embed.set_thumbnail(url=member.display_avatar.url)
-    embed.set_footer(text="This action cannot be undone")
-    
-    await interaction.response.send_message(embed=embed)
-    await log_action(
-        interaction.guild,
-        "🗑️ Squad History Cleared",
-        f"{interaction.user.mention} cleared squad history for {member.mention}"
-    )
-
-@bot.tree.command(name="download_data", description="💾 Download squad data backup (Moderator)")
-async def download_data(interaction: discord.Interaction):
-    """Download the squad_data.json file for backup (moderator only)"""
-    if not is_moderator(interaction.user):
-        await interaction.response.send_message("❌ Only royal moderators may download data.", ephemeral=True)
-        return
-    
-    # Check if file exists
-    if not os.path.exists(DATA_FILE):
-        await interaction.response.send_message("❌ No data file found.", ephemeral=True)
-        return
-    
-    # Send file
-    try:
-        await interaction.response.send_message(
-            "💾 **Squad Data Backup**\n\n⚜️ Here is your complete squad data file.\n\n*Save this file securely as a backup!*",
-            file=discord.File(DATA_FILE, filename=f"squad_backup_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json"),
-            ephemeral=True
-        )
-        await log_action(
-            interaction.guild,
-            "💾 Data Backup Downloaded",
-            f"{interaction.user.mention} downloaded squad data backup"
-        )
-    except Exception as e:
-        await interaction.response.send_message(f"❌ Error downloading file: {e}", ephemeral=True)
-
-@bot.tree.command(name="restore_data", description="📥 Restore squad data from JSON file (Moderator)")
-async def restore_data(interaction: discord.Interaction, file: discord.Attachment):
-    """Restore squad_data.json from uploaded file (moderator only)"""
-    global squad_data  # MUST be at the top!
-    
-    if not is_moderator(interaction.user):
-        await interaction.response.send_message("❌ Only royal moderators may restore data.", ephemeral=True)
-        return
-    
-    # Verify it's a JSON file
-    if not file.filename.endswith('.json'):
-        await interaction.response.send_message("❌ File must be a .json file!", ephemeral=True)
-        return
-    
-    try:
-        # Download the attachment
-        data_bytes = await file.read()
-        data_str = data_bytes.decode('utf-8')
-        
-        # Validate it's valid JSON
-        data_obj = json.loads(data_str)
-        
-        # Backup current data if exists
-        if os.path.exists(DATA_FILE):
-            backup_path = DATA_FILE + f".backup_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
-            with open(backup_path, 'w') as f:
-                json.dump(squad_data, f, indent=2)
-        
-        # Write new data
-        with open(DATA_FILE, 'w') as f:
-            json.dump(data_obj, f, indent=2)
-        
-        # Reload data into memory
-        squad_data = load_data()
-        
-        embed = discord.Embed(
-            title="✅ Data Restored Successfully",
-            description="⚜️ Squad data has been restored from uploaded file!",
-            color=ROYAL_GOLD
-        )
-        embed.add_field(
-            name="📊 Data Summary",
-            value=(
-                f"🏰 Squads: {len(data_obj.get('squads', {}))}\n"
-                f"👥 Players: {len(data_obj.get('players', {}))}\n"
-                f"⚔️ Matches: {len(data_obj.get('matches', []))}"
-            ),
-            inline=False
-        )
-        embed.add_field(
-            name="⚠️ Important",
-            value="**Restart the bot** for all changes to take full effect!",
-            inline=False
-        )
-        embed.set_footer(text="Previous data backed up automatically")
-        
-        await interaction.response.send_message(embed=embed)
-        await log_action(
-            interaction.guild,
-            "📥 Data Restored",
-            f"{interaction.user.mention} restored squad data from file: {file.filename}"
-        )
-        
-    except json.JSONDecodeError:
-        await interaction.response.send_message("❌ Invalid JSON file! Make sure the file is valid JSON.", ephemeral=True)
-    except Exception as e:
-        await interaction.response.send_message(f"❌ Error restoring data: {e}", ephemeral=True)
+            await interaction.response.send_message(
+                "💾 **Squad Data Backup**\n\n⚜️ Here is your complete squad data file.\n\n*Save this file securely as a backup!*",
+                file=discord.File(DATA_FILE, filename=f"squad_backup_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json"),
+                ephemeral=True
+            )
+            await log_action(
+                interaction.guild,
+                "💾 Data Backup Downloaded",
+                f"{interaction.user.mention} downloaded squad data backup"
+            )
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Error downloading file: {e}", ephemeral=True)
 
 # -------------------- SQUAD SELECTOR & HELPER FUNCTIONS --------------------
 
@@ -2830,36 +2459,7 @@ async def show_squad_match_history(interaction, squad_name):
     
     await interaction.response.edit_message(embed=embed, view=None)
 
-# -------------------- SLASH COMMANDS --------------------
-
-@bot.tree.command(name="rivalry", description="⚔️ View head-to-head stats between two kingdoms")
-async def rivalry_command(interaction: discord.Interaction):
-    """Show rivalry stats using dropdown selector - NO MORE TYPING!"""
-    view = SquadSelectorView(purpose="rivalry", step=1)
-    
-    embed = discord.Embed(
-        title="⚔️ Kingdom Rivalry",
-        description="Select the first kingdom to compare:",
-        color=ROYAL_BLUE
-    )
-    
-    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-
-@bot.tree.command(name="squad_history", description="📜 View recent match history for a kingdom")
-async def squad_history_command(interaction: discord.Interaction):
-    """Show squad match history using dropdown selector"""
-    view = SquadSelectorView(purpose="history", step=1)
-    
-    embed = discord.Embed(
-        title="📜 Kingdom Match History",
-        description="Select a kingdom to view their recent battles:",
-        color=ROYAL_BLUE
-    )
-    
-    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-
-@bot.tree.command(name="fun_stats", description="🎲 View fun statistics and trivia about the realm")
-async def fun_stats_command(interaction: discord.Interaction):
+async def show_fun_stats(interaction):
     """Show interesting statistics and trivia"""
     
     # Calculate fun stats
@@ -2958,7 +2558,230 @@ async def fun_stats_command(interaction: discord.Interaction):
     
     embed.set_footer(text="⚜️ History is written by the victorious!")
     
-    await interaction.response.send_message(embed=embed)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+async def show_recent_matches(interaction, limit=10):
+    """Show recent matches"""
+    if limit < 1 or limit > 25:
+        await interaction.response.send_message("❌ Limit must be between 1 and 25.", ephemeral=True)
+        return
+    
+    recent = squad_data["matches"][-limit:][::-1]  # Last N matches, reversed
+    
+    if not recent:
+        await interaction.response.send_message("📜 No matches recorded yet.", ephemeral=True)
+        return
+    
+    embed = discord.Embed(
+        title="📜 Recent Battle Chronicles",
+        description=f"⚜️ *Last {len(recent)} recorded battles*",
+        color=ROYAL_PURPLE
+    )
+    
+    for match in recent:
+        match_id = match.get("match_id", "unknown")
+        team1 = match["team1"]
+        team2 = match["team2"]
+        score = match["score"]
+        date = match.get("date", "Unknown date")
+        
+        try:
+            dt = datetime.fromisoformat(date)
+            date_str = dt.strftime("%b %d, %Y %H:%M")
+        except:
+            date_str = "Unknown date"
+        
+        embed.add_field(
+            name=f"⚔️ {SQUADS.get(team1, '?')} vs {SQUADS.get(team2, '?')}",
+            value=f"**{team1}** {score} **{team2}**\n🆔 `{match_id}` • 📅 {date_str}",
+            inline=False
+        )
+    
+    embed.set_footer(text="Use Delete Match button in mod panel to remove a match")
+    
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+# -------------------- READY --------------------
+@bot.event
+async def on_ready():
+    await bot.tree.sync()
+    safety_sync.start()
+    print(f"✅ Logged in as {bot.user}")
+    print(f"⚜️ Royal Squad Bot is ready to serve!")
+    
+    for guild in bot.guilds:
+        for member in guild.members:
+            role, tag = get_member_squad(member, guild)
+            await safe_nick_update(member, role, tag)
+    
+    print("✅ Initial sync done")
+
+# -------------------- INSTANT ROLE SYNC --------------------
+@bot.event
+async def on_member_update(before, after):
+    role, tag = get_member_squad(after, after.guild)
+    await bot.wait_until_ready()
+    await safe_nick_update(after, role, tag)
+
+# -------------------- SAFETY SYNC --------------------
+@tasks.loop(minutes=5)
+async def safety_sync():
+    for guild in bot.guilds:
+        for member in guild.members:
+            role, tag = get_member_squad(member, guild)
+            await safe_nick_update(member, role, tag)
+
+# -------------------- MAIN SLASH COMMANDS (Only 5 commands!) --------------------
+
+@bot.tree.command(name="panel", description="👥 Open the main member panel")
+async def panel_command(interaction: discord.Interaction):
+    """Main member panel - all features accessible via buttons"""
+    view = MemberPanelView()
+    
+    # Get quick stats
+    total_squads = len(SQUADS)
+    total_matches = len(squad_data["matches"])
+    rankings = get_squad_ranking()
+    top_squad = rankings[0] if rankings else None
+    
+    # Get user's squad if they have one
+    user_role, user_tag = get_member_squad(interaction.user, interaction.guild)
+    user_squad_text = f"\n\n🛡️ **Your Kingdom:** {user_tag} {user_role.name}" if user_role else "\n\n⚔️ **Status:** Free Agent"
+    
+    embed = discord.Embed(
+        title="👥 Royal Member Hall",
+        description=f"⚜️ *Welcome to the royal chambers, {interaction.user.display_name}.*{user_squad_text}",
+        color=ROYAL_BLUE
+    )
+    
+    # Realm stats
+    embed.add_field(
+        name="🌟 Realm Overview",
+        value=(
+            f"🏰 **{total_squads}** Noble Kingdoms\n"
+            f"⚔️ **{total_matches}** Epic Battles\n" +
+            (f"👑 Leading: **{top_squad['name']}** ({top_squad['points']} pts)" if top_squad else "")
+        ),
+        inline=False
+    )
+    
+    embed.add_field(
+        name="📜 Available Actions",
+        value=(
+            "Use the buttons below to access all features!\n"
+            "🏰 Browse Kingdoms • 🏆 Rankings • 🛡️ My Kingdom\n"
+            "🎭 My Profile • ⚙️ Setup Profile • ⚔️ View Rivalry\n"
+            "📜 Match History • 🎲 Fun Stats • 🚪 Leave Kingdom"
+        ),
+        inline=False
+    )
+    
+    embed.set_footer(text="⚜️ May honor guide your path | All features are button-based!")
+    embed.set_thumbnail(url=interaction.user.display_avatar.url)
+    
+    await interaction.response.send_message(embed=embed, view=view)
+
+@bot.tree.command(name="leader_panel", description="👑 Open the leader panel")
+async def leader_panel_command(interaction: discord.Interaction):
+    """Leader panel - all management features accessible via buttons"""
+    if not is_leader(interaction.user):
+        await interaction.response.send_message("❌ Only royal leaders may access this chamber.", ephemeral=True)
+        return
+    
+    squad_role, tag = get_member_squad(interaction.user, interaction.guild)
+    if not squad_role:
+        await interaction.response.send_message("❌ You must be sworn to a kingdom.", ephemeral=True)
+        return
+    
+    guest_role_name = GUEST_ROLES.get(squad_role.name)
+    guest_role = discord.utils.get(interaction.guild.roles, name=guest_role_name) if guest_role_name else None
+    
+    view = LeaderPanelView(squad_role, tag, squad_role.name, guest_role)
+    
+    embed = discord.Embed(
+        title=f"👑 Royal Leadership Chamber - {squad_role.name}",
+        description="⚜️ *Manage your kingdom with the buttons below*\n\n**All actions are button-based - no typing needed!**",
+        color=squad_role.color if squad_role.color != discord.Color.default() else ROYAL_GOLD
+    )
+    embed.add_field(
+        name="🎯 Quick Guide",
+        value=(
+            "➕/➖ **Manage Members** - Recruit or dismiss warriors\n"
+            "⭐/🔄 **Manage Rosters** - Set mains (5 max) & subs (3 max)\n"
+            "👑/🎭 **Manage Roles** - Promote leaders & manage guests\n"
+            "🖼️ **Set Logo** - Update your kingdom's emblem\n"
+            "🏰 **View Kingdom** - See detailed kingdom info"
+        ),
+        inline=False
+    )
+    embed.set_footer(text="⚜️ Lead with honor and wisdom | Use buttons below")
+    
+    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+@bot.tree.command(name="mod_panel", description="🛡️ Open the moderator panel")
+async def mod_panel_command(interaction: discord.Interaction):
+    """Moderator panel - all moderation features accessible via buttons"""
+    if not is_moderator(interaction.user):
+        await interaction.response.send_message("❌ Only royal moderators may access this chamber.", ephemeral=True)
+        return
+    
+    view = ModeratorPanelView()
+    
+    embed = discord.Embed(
+        title="🛡️ Royal Overseer Chamber",
+        description="⚜️ *Manage the realm's tournaments and records*\n\n**All actions are button-based!**",
+        color=ROYAL_PURPLE
+    )
+    embed.add_field(
+        name="📜 Quick Guide",
+        value=(
+            "⚔️ **Record Battle** - Add new match results\n"
+            "🏆 **Award Title** - Grant championship titles\n"
+            "🗑️ **Delete Match** - Remove match results\n"
+            "📜 **Recent Matches** - View match history with IDs\n"
+            "🗑️ **Clear History** - Clear player squad history\n"
+            "💾 **Download Backup** - Save data backup file"
+        ),
+        inline=False
+    )
+    embed.set_footer(text="⚜️ Govern with fairness and strength | Use buttons below")
+    
+    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+@bot.tree.command(name="profile", description="🎭 View a warrior's profile")
+async def profile_command(interaction: discord.Interaction, member: discord.Member):
+    """View any warrior's profile - requires @ mention"""
+    await show_player_profile(interaction, member, public=True)
+
+@bot.tree.command(name="help", description="📜 View command help")
+async def help_command(interaction: discord.Interaction):
+    """Help command with selector for different categories"""
+    view = HelpCategoryView()
+    
+    embed = discord.Embed(
+        title="📜 Royal Command Archives",
+        description="⚜️ *Select a category below to view available commands*\n\n**Almost everything is now button-based!**",
+        color=ROYAL_PURPLE
+    )
+    embed.add_field(
+        name="📋 Available Commands",
+        value=(
+            "`/panel` - Main member panel (button-based)\n"
+            "`/leader_panel` - Leader management panel (button-based)\n"
+            "`/mod_panel` - Moderator panel (button-based)\n"
+            "`/profile @user` - View any warrior's profile\n"
+            "`/help` - This help menu"
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="💡 How It Works",
+        value="Use the selector below to see detailed info for each role!",
+        inline=False
+    )
+    embed.set_footer(text="⚜️ Knowledge is power | All features are button-based!")
+    
+    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 # -------------------- RUN --------------------
 bot.run(os.getenv("DISCORD_TOKEN"))
