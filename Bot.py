@@ -493,20 +493,20 @@ class AddMatchModal(Modal, title="⚔️ Record Battle Result"):
         placeholder="Enter exact squad name",
         required=True
     )
-    
+
     team2 = TextInput(
         label="Second Kingdom",
         placeholder="Enter exact squad name",
         required=True
     )
-    
+
     result = TextInput(
         label="Battle Outcome (team1_score-team2_score)",
         placeholder="e.g., 2-0, 1-1, 0-2",
         required=True,
         max_length=10
     )
-    
+
     async def on_submit(self, interaction: discord.Interaction):
         if self.team1.value not in SQUADS or self.team2.value not in SQUADS:
             await interaction.response.send_message(
@@ -514,7 +514,7 @@ class AddMatchModal(Modal, title="⚔️ Record Battle Result"):
                 ephemeral=True
             )
             return
-        
+
         try:
             score1, score2 = map(int, self.result.value.split('-'))
         except:
@@ -523,67 +523,62 @@ class AddMatchModal(Modal, title="⚔️ Record Battle Result"):
                 ephemeral=True
             )
             return
-        
-        import random
-        
+
         team1_data = squad_data["squads"][self.team1.value]
         team2_data = squad_data["squads"][self.team2.value]
-        
+
         # Determine result and update stats with streaks
         if score1 > score2:
             team1_data["wins"] += 1
             team1_data["points"] += 2
             team2_data["losses"] += 1
-            
-            # Update streaks
+
             team1_streak = update_streak(self.team1.value, "win")
             team2_streak = update_streak(self.team2.value, "loss")
-            
+
             result_text = f"🏆 **{self.team1.value}** has conquered **{self.team2.value}** in glorious battle!"
             flavor_quote = random.choice(VICTORY_QUOTES)
             winner = self.team1.value
             loser = self.team2.value
-            
+
         elif score2 > score1:
             team2_data["wins"] += 1
             team2_data["points"] += 2
             team1_data["losses"] += 1
-            
-            # Update streaks
+
             team1_streak = update_streak(self.team1.value, "loss")
             team2_streak = update_streak(self.team2.value, "win")
-            
+
             result_text = f"🏆 **{self.team2.value}** has conquered **{self.team1.value}** in glorious battle!"
             flavor_quote = random.choice(VICTORY_QUOTES)
             winner = self.team2.value
             loser = self.team1.value
-            
+
         else:
             team1_data["draws"] += 1
             team1_data["points"] += 1
             team2_data["draws"] += 1
             team2_data["points"] += 1
-            
-            # Update streaks
+
             team1_streak = update_streak(self.team1.value, "draw")
             team2_streak = update_streak(self.team2.value, "draw")
-            
+
             result_text = f"⚔️ **{self.team1.value}** and **{self.team2.value}** fought to an honorable stalemate!"
             flavor_quote = random.choice(DRAW_QUOTES)
             winner = None
             loser = None
-        
+
         # Check for achievements
         team1_achievements = check_achievements(self.team1.value)
         team2_achievements = check_achievements(self.team2.value)
-        
+
         # Generate unique match ID
         match_id = str(uuid.uuid4())[:8]
-        
+
         # Get participants (only if exactly 5 mains are set)
         team1_participants = get_match_participants(self.team1.value)
         team2_participants = get_match_participants(self.team2.value)
-        
+
         match_data = {
             "match_id": match_id,
             "team1": self.team1.value,
@@ -594,13 +589,13 @@ class AddMatchModal(Modal, title="⚔️ Record Battle Result"):
             "team1_participants": team1_participants,
             "team2_participants": team2_participants
         }
-        
+
         squad_data["matches"].append(match_data)
         team1_data["match_history"].append(match_data)
         team2_data["match_history"].append(match_data)
-        
+
         save_data(squad_data)
-        
+
         # Create enhanced result embed
         embed = discord.Embed(
             title="📜 Battle Chronicles Updated",
@@ -609,7 +604,7 @@ class AddMatchModal(Modal, title="⚔️ Record Battle Result"):
         )
         embed.add_field(name="🆔 Match ID", value=f"`{match_id}`", inline=False)
         embed.add_field(name="⚔️ Score", value=f"**{self.result.value}**", inline=True)
-        
+
         # Team 1 info with streak
         team1_info = f"💎 {team1_data['points']} points | 🏆 {team1_data['wins']}W ⚔️ {team1_data['draws']}D 💀 {team1_data['losses']}L"
         if team1_streak["count"] >= 3:
@@ -620,7 +615,7 @@ class AddMatchModal(Modal, title="⚔️ Record Battle Result"):
             value=team1_info,
             inline=False
         )
-        
+
         # Team 2 info with streak
         team2_info = f"💎 {team2_data['points']} points | 🏆 {team2_data['wins']}W ⚔️ {team2_data['draws']}D 💀 {team2_data['losses']}L"
         if team2_streak["count"] >= 3:
@@ -631,7 +626,7 @@ class AddMatchModal(Modal, title="⚔️ Record Battle Result"):
             value=team2_info,
             inline=False
         )
-        
+
         # Add achievements if any were earned
         if team1_achievements or team2_achievements:
             achievement_text = ""
@@ -644,9 +639,9 @@ class AddMatchModal(Modal, title="⚔️ Record Battle Result"):
                 for ach in team2_achievements:
                     achievement_text += f"{ach['name']} - *{ach['desc']}*\n"
             embed.add_field(name="🏅 New Achievements!", value=achievement_text, inline=False)
-        
+
         embed.set_footer(text=f"Match ID: {match_id} | May glory follow the victorious!")
-        
+
         await interaction.response.send_message(embed=embed)
         await log_action(
             interaction.guild,
@@ -676,20 +671,20 @@ class AddTitleModal(Modal, title="🏆 Award Championship Title"):
         placeholder="Enter exact squad name",
         required=True
     )
-    
+
     title = TextInput(
         label="Title Name",
         placeholder="e.g., Champion, Tournament Winner",
         required=True
     )
-    
+
     position = TextInput(
         label="Position",
         placeholder="e.g., 1st, 2nd, 3rd",
         required=True,
         max_length=10
     )
-    
+
     async def on_submit(self, interaction: discord.Interaction):
         if self.squad_name.value not in SQUADS:
             await interaction.response.send_message(
@@ -697,40 +692,36 @@ class AddTitleModal(Modal, title="🏆 Award Championship Title"):
                 ephemeral=True
             )
             return
-        
+
         squad_info = squad_data["squads"][self.squad_name.value]
-        
-        # Format the title with position
+
         full_title = f"{self.title.value} ({self.position.value} Place)"
-        
-        # Add title to list
+
         if "titles" not in squad_info:
             squad_info["titles"] = []
-        
+
         squad_info["titles"].append(full_title)
-        
-        # Increment championship wins for 1st place
+
         if self.position.value.lower() in ["1st", "first", "1"]:
             squad_info["championship_wins"] = squad_info.get("championship_wins", 0) + 1
-        
+
         save_data(squad_data)
-        
-        # Determine emoji based on position
+
         position_emoji = "🥇" if self.position.value.lower() in ["1st", "first", "1"] else "🥈" if self.position.value.lower() in ["2nd", "second", "2"] else "🥉"
-        
+
         embed = discord.Embed(
             title="🏆 Royal Title Bestowed",
             description=f"{position_emoji} **{self.squad_name.value}** has been awarded the title:\n\n**{full_title}**",
             color=ROYAL_GOLD
         )
-        
+
         if self.position.value.lower() in ["1st", "first", "1"]:
             embed.add_field(
                 name="👑 Championship Glory",
                 value=f"Total Championships: **{squad_info['championship_wins']}**",
                 inline=False
             )
-        
+
         await interaction.response.send_message(embed=embed)
         await log_action(
             interaction.guild,
@@ -1266,6 +1257,76 @@ class MemberSelectorView(View):
 #                     PANEL VIEWS — THE 3 MAIN CATEGORIES
 # =====================================================================
 
+# -------------------- HELPER: send_profile (used by View Profile button) --------------------
+async def send_profile(interaction: discord.Interaction, member: discord.Member):
+    """Send a player profile as a follow-up message (for use after wait_for)."""
+    pk = str(member.id)
+    pd = squad_data["players"].get(pk)
+    if not pd or not pd.get("ingame_name"):
+        embed = discord.Embed(
+            title="⚜️ Profile Not Found",
+            description=f"{member.mention} hasn't set up their profile yet.",
+            color=ROYAL_BLUE
+        )
+        embed.add_field(name="💡 How to Create", value="Use `/member` → **Setup Profile** to create yours!", inline=False)
+        embed.set_thumbnail(url=member.display_avatar.url)
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        return
+
+    sn = pd.get("squad")
+    sr = None; st = "?"
+    if sn and sn in SQUADS:
+        st = SQUADS[sn]
+        sr = discord.utils.get(interaction.guild.roles, name=sn)
+
+    stats = get_player_stats(member.id)
+
+    rs = "⚔️ Warrior"
+    if sn and sn in squad_data["squads"]:
+        si = squad_data["squads"][sn]
+        if member.id in si.get("main_roster", []):
+            rs = "⭐ Main Roster"
+        elif member.id in si.get("subs", []):
+            rs = "🔄 Substitute"
+
+    embed = discord.Embed(
+        title=f"⚜️ {pd.get('ingame_name', 'Unknown')}",
+        description=f"{member.mention}'s warrior profile",
+        color=sr.color if sr else ROYAL_BLUE
+    )
+    embed.add_field(name="⚔️ IGN", value=pd.get('ingame_name', '?'), inline=True)
+    embed.add_field(name="🎯 ID", value=f"#{pd.get('ingame_id', '?')}", inline=True)
+    embed.add_field(name="🏆 Rank", value=pd.get('highest_rank', '?'), inline=True)
+
+    role = pd.get('role', '?')
+    embed.add_field(name="💼 Position", value=f"{ROLE_EMOJIS.get(role, '⚔️')} {role}", inline=True)
+
+    if sn and sn != "Free Agent":
+        embed.add_field(name="🏰 Kingdom", value=f"{st} **{sn}**\n{rs}", inline=True)
+    else:
+        embed.add_field(name="🏰 Kingdom", value="Free Agent", inline=True)
+
+    sh = pd.get("squad_history", [])
+    if sh:
+        ht = "\n".join(f"{SQUADS.get(e.get('squad','?'), '?')} {e.get('squad','?')}" for e in sh[-3:])
+        if len(sh) > 3: ht += f"\n*+{len(sh)-3} more*"
+        embed.add_field(name="📜 Past Kingdoms", value=ht, inline=False)
+
+    if stats and sn and sn != "Free Agent":
+        embed.add_field(
+            name="📊 Stats",
+            value=f"⚔️ {stats['matches_played']} battles | 🏆 {stats['wins']}W ⚔️ {stats['draws']}D 💀 {stats['losses']}L | **{stats['win_rate']:.1f}%** WR",
+            inline=False
+        )
+
+    if is_leader(member):
+        embed.add_field(name="👑 Status", value="**LEADER**", inline=False)
+
+    embed.set_thumbnail(url=member.display_avatar.url)
+    embed.set_footer(text="⚜️ Majestic Archives")
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+
 # -------------------- 1. MAJESTIC MEMBER PANEL --------------------
 class MemberPanelView(View):
     def __init__(self):
@@ -1290,9 +1351,8 @@ class MemberPanelView(View):
         view = RankingsView(page=1) if tp > 1 else None
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-    @discord.ui.button(label="View Profile", emoji="👤", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="View Profile", emoji="👤", style=discord.ButtonStyle.primary, row=0)
     async def view_profile(self, interaction: discord.Interaction, button: discord.ui.Button):
-
         await interaction.response.send_message(
             "Reply and **mention the member** whose profile you want to view.",
             ephemeral=True
@@ -1316,7 +1376,7 @@ class MemberPanelView(View):
 
         await send_profile(interaction, member)
 
-    @discord.ui.button(label="My Kingdom", style=discord.ButtonStyle.success, emoji="🛡️", row=0)
+    @discord.ui.button(label="My Kingdom", style=discord.ButtonStyle.success, emoji="🛡️", row=1)
     async def my_squad_btn(self, interaction: discord.Interaction, button: Button):
         role, tag = get_member_squad(interaction.user, interaction.guild)
         if not role:
@@ -1336,7 +1396,7 @@ class MemberPanelView(View):
         embed = discord.Embed(title="⚙️ Profile Setup", description="Choose your battle position first:", color=ROYAL_PURPLE)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-    @discord.ui.button(label="Fun Stats", style=discord.ButtonStyle.secondary, emoji="🎲", row=1)
+    @discord.ui.button(label="Fun Stats", style=discord.ButtonStyle.secondary, emoji="🎲", row=2)
     async def fun_btn(self, interaction: discord.Interaction, button: Button):
         await show_fun_stats(interaction)
 
@@ -1417,54 +1477,52 @@ class LeaderPanelView(View):
         self.squad_name = squad_name
         self.guest_role = guest_role
 
-    @discord.ui.button(label="Add Member", emoji="➕", style=discord.ButtonStyle.success)
-async def add_member(self, interaction: discord.Interaction, button: discord.ui.Button):
-
-    await interaction.response.send_message(
-        "Reply to this message and **mention the member** you want to add.",
-        ephemeral=True
-    )
-
-    def check(m):
-        return (
-            m.author.id == interaction.user.id
-            and m.reference
-            and m.reference.message_id == interaction.message.id
-            and len(m.mentions) == 1
+    @discord.ui.button(label="Add Member", emoji="➕", style=discord.ButtonStyle.success, row=0)
+    async def add_member_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message(
+            "Reply to this message and **mention the member** you want to add.",
+            ephemeral=True
         )
 
-    try:
-        msg = await bot.wait_for("message", timeout=60, check=check)
-    except asyncio.TimeoutError:
-        return
+        def check(m):
+            return (
+                m.author.id == interaction.user.id
+                and m.reference
+                and m.reference.message_id == interaction.message.id
+                and len(m.mentions) == 1
+            )
 
-    member = msg.mentions[0]
-    guild = interaction.guild
+        try:
+            msg = await bot.wait_for("message", timeout=60, check=check)
+        except asyncio.TimeoutError:
+            return
 
-    # Remove any old squad role
-    for squad_name in SQUADS:
-        role = discord.utils.get(guild.roles, name=squad_name)
-        if role and role in member.roles:
-            await member.remove_roles(role)
+        member = msg.mentions[0]
+        guild = interaction.guild
 
-    # Give ONLY the squad role (not leader)
-    await member.add_roles(self.squad_role)
+        # Remove any old squad role
+        for sn in SQUADS:
+            role = discord.utils.get(guild.roles, name=sn)
+            if role and role in member.roles:
+                await member.remove_roles(role)
 
-    await safe_nick_update(member, self.squad_role, SQUADS[self.squad_name])
+        # Give ONLY the squad role (not leader)
+        await member.add_roles(self.squad_role)
 
-    old_role, _ = get_member_squad(member, guild)
-    update_player_squad(
-        member.id,
-        self.squad_name,
-        old_role.name if old_role else None
-    )
+        await safe_nick_update(member, self.squad_role, SQUADS[self.squad_name])
 
-    await msg.delete()
+        old_role, _ = get_member_squad(member, guild)
+        update_player_squad(
+            member.id,
+            self.squad_name,
+            old_role.name if old_role else None
+        )
 
-    await interaction.edit_original_response(
-        content=f"✅ {member.mention} added to **{self.squad_name}**."
-    )
+        await msg.delete()
 
+        await interaction.edit_original_response(
+            content=f"✅ {member.mention} added to **{self.squad_name}**."
+        )
 
     @discord.ui.button(label="Remove Member", emoji="➖", style=discord.ButtonStyle.danger, row=0)
     async def rm_btn(self, interaction: discord.Interaction, button: Button):
@@ -1506,49 +1564,48 @@ async def add_member(self, interaction: discord.Interaction, button: discord.ui.
         e = discord.Embed(title="👑 Promote Leader", description="Select a member:", color=ROYAL_GOLD)
         await interaction.response.send_message(embed=e, view=v, ephemeral=True)
 
-    @discord.ui.button(label="give_guest", emoji="➕", style=discord.ButtonStyle.success)
-async def add_member(self, interaction: discord.Interaction, button: discord.ui.Button):
-
-    await interaction.response.send_message(
-        "Reply to this message and **mention the member** you want to add.",
-        ephemeral=True
-    )
-
-    def check(m):
-        return (
-            m.author.id == interaction.user.id
-            and m.reference
-            and m.reference.message_id == interaction.message.id
-            and len(m.mentions) == 1
+    @discord.ui.button(label="Give Guest", emoji="🎭", style=discord.ButtonStyle.success, row=3)
+    async def give_guest_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message(
+            "Reply to this message and **mention the member** you want to give guest access.",
+            ephemeral=True
         )
 
-    try:
-        msg = await bot.wait_for("message", timeout=60, check=check)
-    except asyncio.TimeoutError:
-        return
+        def check(m):
+            return (
+                m.author.id == interaction.user.id
+                and m.reference
+                and m.reference.message_id == interaction.message.id
+                and len(m.mentions) == 1
+            )
 
-    member = msg.mentions[0]
-    guild = interaction.guild
+        try:
+            msg = await bot.wait_for("message", timeout=60, check=check)
+        except asyncio.TimeoutError:
+            return
 
+        member = msg.mentions[0]
 
-    # Give ONLY the squad role (not leader)
-    await member.add_roles(GUEST_ROLE)
+        # Look up the correct guest role for this squad
+        grn = GUEST_ROLES.get(self.squad_name)
+        if not grn:
+            await interaction.edit_original_response(content="❌ No guest role configured for this kingdom.")
+            await msg.delete()
+            return
 
-    await safe_nick_update(member, self.squad_role, SQUADS[self.squad_name])
+        gr = discord.utils.get(interaction.guild.roles, name=grn)
+        if not gr:
+            await interaction.edit_original_response(content=f"❌ Guest role '{grn}' not found in server.")
+            await msg.delete()
+            return
 
-    old_role, _ = get_member_squad(member, guild)
-    update_player_squad(
-        member.id,
-        self.squad_name,
-        old_role.name if old_role else None
-    )
+        await member.add_roles(gr)
 
-    await msg.delete()
+        await msg.delete()
 
-    await interaction.edit_original_response(
-        content=f"✅ {member.mention} is now a **{self.squad_name}** guest."
-    )
-
+        await interaction.edit_original_response(
+            content=f"✅ {member.mention} is now a **{self.squad_name}** guest."
+        )
 
     @discord.ui.button(label="Remove Guest", emoji="❌", style=discord.ButtonStyle.secondary, row=3)
     async def rm_guest_btn(self, interaction: discord.Interaction, button: Button):
