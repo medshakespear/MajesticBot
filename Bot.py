@@ -2475,7 +2475,6 @@ async def leader_panel(interaction: discord.Interaction):
 
 # -------------------- MODERATOR COMMANDS --------------------
 @bot.tree.command(name="moderator", description="🛡️ Open moderator panel to oversee the realm")
-@bot.tree.command(name="moderator", description="🛡️ Open moderator panel to oversee the realm")
 async def moderator_panel(interaction: discord.Interaction):
     if not is_moderator(interaction.user):
         await interaction.response.send_message("❌ Only royal moderators may access this chamber.", ephemeral=True)
