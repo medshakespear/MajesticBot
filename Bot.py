@@ -1312,14 +1312,45 @@ async def show_squad_info(interaction, squad_role, squad_name, tag, public=False
     await interaction.response.send_message(embed=embed, view=view, ephemeral=not public)
 
 class SquadInfoView(View):
-    """View for squad info with match history button"""
+    """View for squad info with match history AND rivalry buttons"""
     def __init__(self, squad_name):
         super().__init__(timeout=180)
         self.squad_name = squad_name
     
-    @discord.ui.button(label="Match History", emoji="📜", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="Match History", emoji="📜", style=discord.ButtonStyle.primary, row=0)
     async def match_history_button(self, interaction: discord.Interaction, button: Button):
         await show_squad_match_history(interaction, self.squad_name)
+    
+    @discord.ui.button(label="View Rivalry", emoji="⚔️", style=discord.ButtonStyle.primary, row=0)
+    async def rivalry_button(self, interaction: discord.Interaction, button: Button):
+        # Show squad selector for rivalry opponent
+        view = RivalrySquadSelector(self.squad_name)
+        embed = discord.Embed(
+            title=f"⚔️ {self.squad_name} Rivalry",
+            description="Select an opponent to view head-to-head stats:",
+            color=ROYAL_RED
+        )
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+class RivalrySquadSelector(View):
+    """Select opponent for rivalry stats"""
+    def __init__(self, squad1):
+        super().__init__(timeout=180)
+        self.squad1 = squad1
+        
+        # All squads except squad1
+        options = [
+            discord.SelectOption(label=name, value=name, emoji="🏰", description=f"Tag: {tag}")
+            for name, tag in sorted(SQUADS.items()) if name != squad1
+        ][:25]
+        
+        select = Select(placeholder="⚔️ Select rival kingdom...", options=options)
+        select.callback = self.squad_selected
+        self.add_item(select)
+    
+    async def squad_selected(self, interaction):
+        squad2 = interaction.data["values"][0]
+        await show_rivalry_stats(interaction, self.squad1, squad2)
 
 async def show_player_profile(interaction, member: discord.Member, public=False):
     """Display comprehensive player profile"""
@@ -1743,6 +1774,11 @@ class MemberPanelView(View):
         
         await show_squad_info(interaction, role, role.name, tag, public=False)
     
+    @discord.ui.button(label="View Profile", style=discord.ButtonStyle.primary, emoji="🎭", row=1)
+    async def view_profile_button(self, interaction: discord.Interaction, button: Button):
+        modal = ProfileViewModal()
+        await interaction.response.send_modal(modal)
+
     @discord.ui.button(label="My Profile", style=discord.ButtonStyle.success, emoji="🎭", row=1)
     async def my_profile_button(self, interaction: discord.Interaction, button: Button):
         await show_player_profile(interaction, interaction.user, public=True)
@@ -2405,31 +2441,133 @@ async def profile_command(interaction: discord.Interaction, member: Optional[dis
 
 @bot.tree.command(name="majestic_help", description="📜 View all available commands and their usage")
 async def help_command(interaction: discord.Interaction):
-    view = HelpCategoryView()
+    """Show help based on role"""
+    
+    # Determine user's role
+    is_mod = is_moderator(interaction.user)
+    is_lead = is_leader(interaction.user)
+    
+    # Create buttons for categories
+    view = View(timeout=180)
+    
+    member_btn = Button(label="Majestic Member", emoji="👥", style=discord.ButtonStyle.primary)
+    member_btn.callback = lambda i: show_help_category(i, "member")
+    view.add_item(member_btn)
+    
+    if is_lead:
+        leader_btn = Button(label="Majestic Leader", emoji="👑", style=discord.ButtonStyle.success)
+        leader_btn.callback = lambda i: show_help_category(i, "leader")
+        view.add_item(leader_btn)
+    
+    # Moderator button only visible to moderators (not in help)
     
     embed = discord.Embed(
-        title="📜 Royal Command Archives",
-        description="⚜️ *Select a category below to view available commands*",
-        color=ROYAL_PURPLE
+        title="📜 Majestic Dominion Help",
+        description="⚜️ *Select your category below*",
+        color=ROYAL_BLUE
     )
+    
     embed.add_field(
-        name="👥 Member Commands",
-        value="Commands available to all warriors",
+        name="📚 Available Categories",
+        value=(
+            "👥 **Majestic Member** - View kingdoms, profiles, and statistics\n" +
+            ("👑 **Majestic Leader** - Manage your kingdom and warriors\n" if is_lead else "") +
+            "\n*Moderator commands are accessed via `/moderator` panel*"
+        ),
         inline=False
     )
-    embed.add_field(
-        name="👑 Leader Commands",
-        value="Commands for managing your kingdom",
-        inline=False
-    )
-    embed.add_field(
-        name="🛡️ Moderator Commands",
-        value="Commands for tournament overseers",
-        inline=False
-    )
-    embed.set_footer(text="⚜️ Knowledge is power")
+    
+    embed.set_footer(text="⚜️ Royal Command Archives")
     
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+async def show_help_category(interaction, category):
+    """Show specific help category"""
+    embed = discord.Embed(color=ROYAL_BLUE)
+    
+    if category == "member":
+        embed.title = "👥 Majestic Member Commands"
+        embed.description = "⚜️ *Commands available to all warriors*"
+        
+        embed.add_field(
+            name="/majestic_members",
+            value="📖 Open member panel - Browse kingdoms, view rankings, manage profile\n*Click this to access all member features via buttons!*",
+            inline=False
+        )
+        embed.add_field(
+            name="/profile @user (optional)",
+            value="🎭 View a warrior's profile. Leave blank for your own.\n*Example: `/profile` or `/profile @JohnDoe`*",
+            inline=False
+        )
+        embed.add_field(
+            name="/fun_stats",
+            value="🎲 View interesting statistics and trivia about the realm\n*Example: `/fun_stats`*",
+            inline=False
+        )
+        embed.add_field(
+            name="/majestic_help",
+            value="📜 Display this help guide\n*Example: `/majestic_help`*",
+            inline=False
+        )
+        
+        embed.add_field(
+            name="🏰 Features in Member Panel",
+            value=(
+                "• **Browse Kingdoms** - View all squads with details\n"
+                "  - Click any squad to see: roster, stats, logo\n"
+                "  - **[📜 Match History]** button - Last 10 matches\n"
+                "  - **[⚔️ View Rivalry]** button - Compare vs any squad\n"
+                "• **Rankings** - See top kingdoms by points\n"
+                "• **Setup Profile** - Create your warrior profile\n"
+                "• **Leave Squad** - Depart from current kingdom"
+            ),
+            inline=False
+        )
+    
+    elif category == "leader":
+        embed.title = "👑 Majestic Leader Commands"
+        embed.description = "⚜️ *Commands for managing your royal kingdom*"
+        
+        embed.add_field(
+            name="/majestic_leaders",
+            value="📖 Open leader panel with ALL management buttons\n*This is your command center - everything is buttons!*",
+            inline=False
+        )
+        
+        embed.add_field(
+            name="🎯 Leader Panel Buttons",
+            value=(
+                "**Member Management:**\n"
+                "• **[➕ Add Member]** - Recruit via @mention\n"
+                "• **[➖ Remove Member]** - Dismiss warriors (selector)\n"
+                "• **[🏰 View Kingdom]** - See your squad details\n\n"
+                "**Roster Management:**\n"
+                "• **[⭐ Set Main Roster]** - Add to elite 5 (selector)\n"
+                "• **[❌ Remove from Mains]** - Remove from elite (selector)\n"
+                "• **[🔄 Set Substitute]** - Add to reserves (selector)\n"
+                "• **[❌ Remove from Subs]** - Remove from reserves (selector)\n\n"
+                "**Leadership:**\n"
+                "• **[👑 Promote Leader]** - Grant leadership (selector)\n"
+                "• **[🎭 Give Guest]** - Grant guest access (selector)\n"
+                "• **[❌ Remove Guest]** - Revoke access (selector)\n"
+                "• **[🖼️ Set Logo]** - Update royal emblem"
+            ),
+            inline=False
+        )
+        
+        embed.add_field(
+            name="💡 Pro Tips",
+            value=(
+                "• Main roster = 5 warriors (only they count in match stats)\n"
+                "• Substitutes = 3 warriors (reserves)\n"
+                "• Tag members when adding: **@Username**\n"
+                "• Use selectors when removing/managing rosters"
+            ),
+            inline=False
+        )
+    
+    embed.set_footer(text="⚜️ Royal Command Archives")
+    await interaction.response.edit_message(embed=embed, view=None)
 
 # LEADER COMMANDS
 @bot.tree.command(name="majestic_leaders", description="👑 Open leader panel to manage your kingdom")
@@ -3118,31 +3256,6 @@ async def show_squad_match_history(interaction, squad_name):
 
 # -------------------- SLASH COMMANDS --------------------
 
-@bot.tree.command(name="rivalry", description="⚔️ View head-to-head stats between two kingdoms")
-async def rivalry_command(interaction: discord.Interaction):
-    """Show rivalry stats using dropdown selector - NO MORE TYPING!"""
-    view = SquadSelectorView(purpose="rivalry", step=1)
-    
-    embed = discord.Embed(
-        title="⚔️ Kingdom Rivalry",
-        description="Select the first kingdom to compare:",
-        color=ROYAL_BLUE
-    )
-    
-    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-
-@bot.tree.command(name="squad_history", description="📜 View recent match history for a kingdom")
-async def squad_history_command(interaction: discord.Interaction):
-    """Show squad match history using dropdown selector"""
-    view = SquadSelectorView(purpose="history", step=1)
-    
-    embed = discord.Embed(
-        title="📜 Kingdom Match History",
-        description="Select a kingdom to view their recent battles:",
-        color=ROYAL_BLUE
-    )
-    
-    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 @bot.tree.command(name="fun_stats", description="🎲 View fun statistics and trivia about the realm")
 async def fun_stats_command(interaction: discord.Interaction):
