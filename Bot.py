@@ -1,4 +1,3 @@
-claude
 import discord
 from discord.ext import commands, tasks
 from discord.ui import Button, View, Select, Modal, TextInput
@@ -1292,30 +1291,30 @@ class MemberPanelView(View):
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
     @discord.ui.button(label="View Profile", emoji="👤", style=discord.ButtonStyle.primary)
-async def view_profile(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def view_profile(self, interaction: discord.Interaction, button: discord.ui.Button):
 
-    await interaction.response.send_message(
-        "Reply and **mention the member** whose profile you want to view.",
-        ephemeral=True
-    )
-
-    def check(m):
-        return (
-            m.author.id == interaction.user.id
-            and m.reference
-            and m.reference.message_id == interaction.message.id
-            and len(m.mentions) == 1
+        await interaction.response.send_message(
+            "Reply and **mention the member** whose profile you want to view.",
+            ephemeral=True
         )
 
-    try:
-        msg = await bot.wait_for("message", timeout=60, check=check)
-    except asyncio.TimeoutError:
-        return
+        def check(m):
+            return (
+                m.author.id == interaction.user.id
+                and m.reference
+                and m.reference.message_id == interaction.message.id
+                and len(m.mentions) == 1
+            )
 
-    member = msg.mentions[0]
-    await msg.delete()
+        try:
+            msg = await bot.wait_for("message", timeout=60, check=check)
+        except asyncio.TimeoutError:
+            return
 
-    await send_profile(interaction, member)
+        member = msg.mentions[0]
+        await msg.delete()
+
+        await send_profile(interaction, member)
 
     @discord.ui.button(label="My Kingdom", style=discord.ButtonStyle.success, emoji="🛡️", row=0)
     async def my_squad_btn(self, interaction: discord.Interaction, button: Button):
