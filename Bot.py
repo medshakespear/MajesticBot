@@ -748,19 +748,44 @@ class ViewProfileModal(Modal, title="🎭 View Warrior Profile"):
 
 # -------------------- MATCH RECORDING MODALS --------------------
 
-class AddMatchModal(Modal, title="⚔️ Record Battle Result"):
-    team1 = TextInput(
-        label="First Kingdom",
-        placeholder="Enter exact squad name",
-        required=True
-    )
+class MatchSquadSelectorView(View):
+    """Squad selector for recording matches - moderators"""
+    def __init__(self, step=1, team1=None):
+        super().__init__(timeout=180)
+        self.step = step
+        self.team1 = team1
+        
+        # Create squad options
+        all_squads = sorted(SQUADS.items())
+        options = [
+            discord.SelectOption(label=name, value=name, emoji="🏰", description=f"Tag: {tag}")
+            for name, tag in all_squads[:25]
+        ]
+        
+        placeholder = "⚔️ Select Team 1..." if step == 1 else "⚔️ Select Team 2..."
+        select = Select(placeholder=placeholder, options=options)
+        select.callback = self.squad_selected
+        self.add_item(select)
     
-    team2 = TextInput(
-        label="Second Kingdom",
-        placeholder="Enter exact squad name",
-        required=True
-    )
-    
+    async def squad_selected(self, interaction):
+        selected = interaction.data["values"][0]
+        
+        if self.step == 1:
+            # Show team 2 selector
+            view = MatchSquadSelectorView(step=2, team1=selected)
+            embed = discord.Embed(
+                title="⚔️ Record Battle",
+                description=f"✅ Team 1: **{SQUADS[selected]} {selected}**\n\nNow select Team 2:",
+                color=ROYAL_BLUE
+            )
+            await interaction.response.edit_message(embed=embed, view=view)
+        else:
+            # Open score modal
+            modal = AddMatchModalWithTeams(self.team1, selected)
+            await interaction.response.send_modal(modal)
+
+class AddMatchModalWithTeams(Modal, title="⚔️ Record Battle Result"):
+    """Match recording with pre-selected teams"""
     result = TextInput(
         label="Battle Outcome (team1_score-team2_score)",
         placeholder="e.g., 2-0, 1-1, 0-2",
@@ -768,7 +793,22 @@ class AddMatchModal(Modal, title="⚔️ Record Battle Result"):
         max_length=10
     )
     
-    async def on_submit(self, interaction: discord.Interaction):
+    def __init__(self, team1, team2):
+        super().__init__()
+        self.team1_name = team1
+        self.team2_name = team2
+        self.add_item(TextInput(
+            label="Team 1",
+            default=team1,
+            required=True
+        ))
+        self.add_item(TextInput(
+            label="Team 2", 
+            default=team2,
+            required=True
+        ))
+    
+    async def on_submit(self, interaction):
         if self.team1.value not in SQUADS or self.team2.value not in SQUADS:
             await interaction.response.send_message(
                 "❌ One or both kingdom names are invalid. Use exact squad names.",
@@ -2291,9 +2331,6 @@ class LeaderPanelView(View):
         embed = discord.Embed(title="➖ Remove Warrior", description="Select a member to remove from your kingdom:", color=ROYAL_PURPLE)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
     
-    @discord.ui.button(label="View Kingdom", emoji="🏰", style=discord.ButtonStyle.primary, row=0)
-    async def view_kingdom_button(self, interaction: discord.Interaction, button: Button):
-        await show_squad_info(interaction, self.squad_name)
     
     @discord.ui.button(label="Set Main Roster", emoji="⭐", style=discord.ButtonStyle.primary, row=1)
     async def set_main_button(self, interaction: discord.Interaction, button: Button):
@@ -2348,9 +2385,13 @@ class ModeratorPanelView(View):
     
     @discord.ui.button(label="Record Battle", style=discord.ButtonStyle.primary, emoji="⚔️", row=0)
     async def add_match_button(self, interaction: discord.Interaction, button: Button):
-        modal = AddMatchModal()
-        await interaction.response.send_modal(modal)
-
+        view = MatchSquadSelectorView(step=1)
+        embed = discord.Embed(
+            title="⚔️ Record Battle",
+            description="Select the first team:",
+            color=ROYAL_BLUE
+        )
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 # -------------------- READY --------------------
 @bot.event
 async def on_ready():
