@@ -542,6 +542,394 @@ GUEST_QUOTES = [
 ]
 
 
+# =====================================================================
+#                     AI ENGINE — Prediction & Intelligence
+# =====================================================================
+
+def predict_match(team1: str, team2: str):
+    """AI match prediction based on multiple factors. Returns dict with analysis."""
+    t1d = squad_data["squads"].get(team1, {})
+    t2d = squad_data["squads"].get(team2, {})
+
+    # Factor 1: Win Rate (weight: 35%)
+    t1_total = t1d.get("wins", 0) + t1d.get("draws", 0) + t1d.get("losses", 0)
+    t2_total = t2d.get("wins", 0) + t2d.get("draws", 0) + t2d.get("losses", 0)
+    t1_wr = (t1d.get("wins", 0) / t1_total * 100) if t1_total > 0 else 50
+    t2_wr = (t2d.get("wins", 0) / t2_total * 100) if t2_total > 0 else 50
+
+    # Factor 2: Head-to-Head (weight: 25%)
+    h2h = get_head_to_head(team1, team2)
+    if h2h["total"] > 0:
+        t1_h2h = (h2h["squad1_wins"] / h2h["total"]) * 100
+        t2_h2h = (h2h["squad2_wins"] / h2h["total"]) * 100
+    else:
+        t1_h2h = 50
+        t2_h2h = 50
+
+    # Factor 3: Current Form — last 5 matches (weight: 25%)
+    def get_form_score(squad_name):
+        history = squad_data["squads"].get(squad_name, {}).get("match_history", [])[-5:]
+        if not history:
+            return 50
+        score = 0
+        for i, m in enumerate(history):
+            weight = 1 + (i * 0.2)  # Recent matches weighted more
+            try:
+                s1, s2 = map(int, m["score"].split('-'))
+                if m["team1"] == squad_name:
+                    score += (20 * weight) if s1 > s2 else (5 * weight) if s1 == s2 else 0
+                else:
+                    score += (20 * weight) if s2 > s1 else (5 * weight) if s1 == s2 else 0
+            except:
+                pass
+        return min(score / len(history) * 5, 100)
+
+    t1_form = get_form_score(team1)
+    t2_form = get_form_score(team2)
+
+    # Factor 4: Momentum / Streak (weight: 15%)
+    t1_cs = t1d.get("current_streak", {"type": "none", "count": 0})
+    t2_cs = t2d.get("current_streak", {"type": "none", "count": 0})
+
+    def streak_score(cs):
+        if cs["type"] == "win": return min(50 + cs["count"] * 10, 100)
+        elif cs["type"] == "loss": return max(50 - cs["count"] * 10, 0)
+        return 50
+
+    t1_streak = streak_score(t1_cs)
+    t2_streak = streak_score(t2_cs)
+
+    # Factor 5: Roster completeness bonus
+    t1_roster = 10 if len(t1d.get("main_roster", [])) == 5 else 0
+    t2_roster = 10 if len(t2d.get("main_roster", [])) == 5 else 0
+
+    # Weighted composite score
+    t1_score = (t1_wr * 0.35) + (t1_h2h * 0.25) + (t1_form * 0.25) + (t1_streak * 0.15) + t1_roster
+    t2_score = (t2_wr * 0.35) + (t2_h2h * 0.25) + (t2_form * 0.25) + (t2_streak * 0.15) + t2_roster
+
+    # Normalize to percentages
+    total_score = t1_score + t2_score
+    if total_score > 0:
+        t1_pct = round(t1_score / total_score * 100)
+        t2_pct = 100 - t1_pct
+    else:
+        t1_pct = t2_pct = 50
+
+    # Draw probability based on how close the scores are
+    diff = abs(t1_pct - t2_pct)
+    draw_pct = max(5, 30 - diff)
+    t1_pct = round(t1_pct * (100 - draw_pct) / 100)
+    t2_pct = 100 - t1_pct - draw_pct
+
+    # Confidence level
+    data_points = t1_total + t2_total + h2h["total"]
+    if data_points >= 20: confidence = "🟢 HIGH"
+    elif data_points >= 8: confidence = "🟡 MEDIUM"
+    else: confidence = "🔴 LOW"
+
+    # Narrative
+    if t1_pct > t2_pct + 20:
+        narrative = f"**{team1}** holds a commanding advantage! Their superior form and record make them the clear favorite."
+    elif t2_pct > t1_pct + 20:
+        narrative = f"**{team2}** holds a commanding advantage! Their superior form and record make them the clear favorite."
+    elif abs(t1_pct - t2_pct) <= 10:
+        narrative = "This is an **extremely close matchup**! Both kingdoms are evenly matched — expect a thrilling battle!"
+    elif t1_pct > t2_pct:
+        narrative = f"**{team1}** has a slight edge, but **{team2}** could easily pull off an upset. This one's unpredictable!"
+    else:
+        narrative = f"**{team2}** has a slight edge, but **{team1}** could easily pull off an upset. This one's unpredictable!"
+
+    # Key factors text
+    factors = []
+    if h2h["total"] > 0:
+        factors.append(f"⚔️ H2H: {h2h['squad1_wins']}-{h2h['draws']}-{h2h['squad2_wins']} ({h2h['total']} meetings)")
+    if t1_cs["count"] >= 3:
+        se = "🔥" if t1_cs["type"] == "win" else "❄️"
+        factors.append(f"{se} {team1} on a **{t1_cs['count']} {t1_cs['type']}** streak")
+    if t2_cs["count"] >= 3:
+        se = "🔥" if t2_cs["type"] == "win" else "❄️"
+        factors.append(f"{se} {team2} on a **{t2_cs['count']} {t2_cs['type']}** streak")
+    if t1_wr > 0 or t2_wr > 0:
+        factors.append(f"📊 Win Rates: {t1_wr:.0f}% vs {t2_wr:.0f}%")
+
+    return {
+        "t1_pct": t1_pct, "t2_pct": t2_pct, "draw_pct": draw_pct,
+        "confidence": confidence, "narrative": narrative, "factors": factors,
+        "h2h": h2h, "t1_wr": t1_wr, "t2_wr": t2_wr,
+    }
+
+
+def generate_squad_report(squad_name: str):
+    """Generate an AI intelligence report for a squad."""
+    si = squad_data["squads"].get(squad_name, {})
+    w, d, l = si.get("wins", 0), si.get("draws", 0), si.get("losses", 0)
+    total = w + d + l
+    wr = (w / total * 100) if total > 0 else 0
+
+    report = {"strengths": [], "weaknesses": [], "threat_level": 0, "form_trend": "", "rival": None, "insights": []}
+
+    # Threat Level (0-100)
+    rank = get_squad_rank(squad_name) or len(SQUADS)
+    rank_score = max(0, 100 - (rank - 1) * (100 / len(SQUADS)))
+    wr_score = wr
+    cs = si.get("current_streak", {"type": "none", "count": 0})
+    momentum = 10 if cs.get("type") == "win" else -10 if cs.get("type") == "loss" else 0
+    momentum *= min(cs.get("count", 0), 5) / 5
+    roster_bonus = 15 if len(si.get("main_roster", [])) == 5 else 0
+    title_bonus = min(si.get("championship_wins", 0) * 5, 15)
+
+    threat = min(100, max(0, int(rank_score * 0.4 + wr_score * 0.3 + momentum + roster_bonus + title_bonus)))
+    report["threat_level"] = threat
+
+    # Threat Tier
+    if threat >= 85: report["threat_tier"] = ("☠️ LETHAL", "Extremely dangerous — approach with caution!")
+    elif threat >= 70: report["threat_tier"] = ("🔥 DANGEROUS", "A serious contender in any battle!")
+    elif threat >= 50: report["threat_tier"] = ("⚔️ COMPETITIVE", "Capable of winning against most opponents")
+    elif threat >= 30: report["threat_tier"] = ("🛡️ DEVELOPING", "Building strength, not to be underestimated")
+    else: report["threat_tier"] = ("🌱 EMERGING", "Early stages — potential yet to be unlocked")
+
+    # Form Trend (last 10 vs previous 10)
+    history = si.get("match_history", [])
+    if len(history) >= 10:
+        def count_wins(matches, sn):
+            wins = 0
+            for m in matches:
+                try:
+                    s1, s2 = map(int, m["score"].split('-'))
+                    if (m["team1"] == sn and s1 > s2) or (m["team2"] == sn and s2 > s1):
+                        wins += 1
+                except:
+                    pass
+            return wins
+        recent_wins = count_wins(history[-5:], squad_name)
+        older_wins = count_wins(history[-10:-5], squad_name)
+        if recent_wins > older_wins + 1:
+            report["form_trend"] = "📈 **ASCENDING** — Performance is improving rapidly!"
+        elif recent_wins < older_wins - 1:
+            report["form_trend"] = "📉 **DECLINING** — Recent form has dropped off"
+        else:
+            report["form_trend"] = "➡️ **STABLE** — Consistent performance maintained"
+    elif len(history) >= 3:
+        report["form_trend"] = "📊 **EARLY DAYS** — Not enough data for trend analysis"
+    else:
+        report["form_trend"] = "🆕 **NEW** — Just getting started!"
+
+    # Strengths
+    if wr >= 60: report["strengths"].append("🏆 Elite win rate")
+    if cs.get("type") == "win" and cs.get("count", 0) >= 3: report["strengths"].append(f"🔥 Hot streak ({cs['count']} wins)")
+    if len(si.get("main_roster", [])) == 5: report["strengths"].append("⭐ Full main roster")
+    if si.get("championship_wins", 0) > 0: report["strengths"].append(f"👑 Championship pedigree ({si['championship_wins']}x)")
+    if d > 0 and total > 0 and (d / total) < 0.15: report["strengths"].append("⚡ Decisive — rarely draws")
+    if si.get("biggest_win_streak", 0) >= 5: report["strengths"].append(f"💪 Historic dominance ({si['biggest_win_streak']} best streak)")
+
+    # Weaknesses
+    if wr < 40 and total >= 5: report["weaknesses"].append("💀 Low win rate")
+    if cs.get("type") == "loss" and cs.get("count", 0) >= 3: report["weaknesses"].append(f"❄️ Cold streak ({cs['count']} losses)")
+    if len(si.get("main_roster", [])) < 5: report["weaknesses"].append(f"⚠️ Incomplete roster ({len(si.get('main_roster', []))}/5)")
+    if total > 0 and l > w: report["weaknesses"].append("📉 More losses than wins")
+    if total < 3: report["weaknesses"].append("🆕 Limited match experience")
+
+    if not report["strengths"]: report["strengths"].append("🌱 Potential waiting to bloom!")
+    if not report["weaknesses"]: report["weaknesses"].append("✨ No major weaknesses detected!")
+
+    # Find biggest rival (most matches played against)
+    rival_counts = {}
+    for m in history:
+        opponent = m["team2"] if m["team1"] == squad_name else m["team1"]
+        rival_counts[opponent] = rival_counts.get(opponent, 0) + 1
+    if rival_counts:
+        rival_name = max(rival_counts, key=rival_counts.get)
+        h2h = get_head_to_head(squad_name, rival_name)
+        report["rival"] = {"name": rival_name, "matches": h2h["total"], "h2h": h2h}
+
+    # Fun insights
+    if total > 0:
+        report["insights"].append(f"🎯 Point efficiency: **{si.get('points', 0) / total:.1f}** pts per match")
+    if si.get("biggest_win_streak", 0) > 0:
+        report["insights"].append(f"🏔️ Peak performance: **{si['biggest_win_streak']}** consecutive victories")
+    if len(si.get("achievements", [])) > 0:
+        report["insights"].append(f"🏅 **{len(si['achievements'])}** achievements unlocked")
+
+    return report
+
+
+def generate_realm_news():
+    """Generate dynamic realm news bulletin from recent data."""
+    headlines = []
+    matches = squad_data["matches"]
+    rankings = get_squad_ranking()
+
+    # 1. Latest match result
+    if matches:
+        last = matches[-1]
+        t1, t2, score = last["team1"], last["team2"], last["score"]
+        try:
+            s1, s2 = map(int, score.split('-'))
+            if s1 > s2:
+                headlines.append(f"⚔️ **{SQUADS[t1]} {t1}** triumphs over **{SQUADS[t2]} {t2}** ({score}) in the latest battle!")
+            elif s2 > s1:
+                headlines.append(f"⚔️ **{SQUADS[t2]} {t2}** triumphs over **{SQUADS[t1]} {t1}** ({score}) in the latest battle!")
+            else:
+                headlines.append(f"⚖️ **{SQUADS[t1]} {t1}** and **{SQUADS[t2]} {t2}** battle to a stalemate ({score})!")
+        except:
+            pass
+
+    # 2. Hottest streak in the realm
+    hottest_name, hottest_count = None, 0
+    coldest_name, coldest_count = None, 0
+    for sn, d in squad_data["squads"].items():
+        cs = d.get("current_streak", {"type": "none", "count": 0})
+        if cs.get("type") == "win" and cs.get("count", 0) > hottest_count:
+            hottest_name, hottest_count = sn, cs["count"]
+        if cs.get("type") == "loss" and cs.get("count", 0) > coldest_count:
+            coldest_name, coldest_count = sn, cs["count"]
+
+    if hottest_name and hottest_count >= 2:
+        headlines.append(f"🔥 **{SQUADS[hottest_name]} {hottest_name}** is ON FIRE with a **{hottest_count}-win streak**! Who can stop them?")
+    if coldest_name and coldest_count >= 3:
+        headlines.append(f"❄️ **{SQUADS[coldest_name]} {coldest_name}** struggles through a **{coldest_count}-loss streak**. Can they turn it around?")
+
+    # 3. Championship leader
+    if rankings:
+        leader = rankings[0]
+        if leader["points"] > 0:
+            if len(rankings) > 1:
+                gap = leader["points"] - rankings[1]["points"]
+                headlines.append(f"👑 **{leader['tag']} {leader['name']}** leads the realm with **{leader['points']} pts** ({'+' + str(gap) if gap > 0 else 'TIED'} over #{2})")
+            else:
+                headlines.append(f"👑 **{leader['tag']} {leader['name']}** leads the realm with **{leader['points']} pts**!")
+
+    # 4. Rising kingdom (biggest positive point change potential)
+    underdogs = [s for s in rankings if s["total_matches"] >= 3 and s["rank"] > 5 and s["win_rate"] > 55]
+    if underdogs:
+        rising = random.choice(underdogs)
+        headlines.append(f"📈 **{rising['tag']} {rising['name']}** is a dark horse — ranked #{rising['rank']} but winning **{rising['win_rate']:.0f}%** of their battles!")
+
+    # 5. Rivalry alert — find most contested matchup
+    matchup_counts = {}
+    for m in matches[-20:]:
+        key = tuple(sorted([m["team1"], m["team2"]]))
+        matchup_counts[key] = matchup_counts.get(key, 0) + 1
+    if matchup_counts:
+        hottest_pair = max(matchup_counts, key=matchup_counts.get)
+        if matchup_counts[hottest_pair] >= 2:
+            headlines.append(f"⚔️ Rivalry Watch: **{SQUADS.get(hottest_pair[0], '?')} {hottest_pair[0]}** vs **{SQUADS.get(hottest_pair[1], '?')} {hottest_pair[1]}** — {matchup_counts[hottest_pair]} clashes recently!")
+
+    # 6. Random fun fact
+    total_matches = len(matches)
+    total_players = len([p for p in squad_data["players"].values() if p.get("ingame_name")])
+    fun_facts = [
+        f"📊 The realm has witnessed **{total_matches}** battles so far!",
+        f"🗡️ **{total_players}** warriors have registered their profiles!",
+        f"🏰 **{len(SQUADS)}** kingdoms compete for eternal glory!",
+    ]
+    if total_matches > 0:
+        total_draws = sum(1 for m in matches if len(set(m["score"].split('-'))) == 1)
+        fun_facts.append(f"🤝 **{total_draws}** battles ended in a draw ({total_draws/total_matches*100:.0f}%)")
+    headlines.append(random.choice(fun_facts))
+
+    return headlines
+
+
+# =====================================================================
+#                     AI VIEWS — Prediction & Reports
+# =====================================================================
+
+class MatchPredictorStep1View(View):
+    """Step 1: Pick first team for prediction"""
+    def __init__(self, page=1):
+        super().__init__(timeout=180)
+        self.page = page
+        all_squads = sorted(SQUADS.items())
+        start = (page - 1) * 25
+        end = start + 25
+        page_squads = all_squads[start:end]
+
+        options = [discord.SelectOption(label=n, value=n, emoji="🏰", description=f"Tag: {t}") for n, t in page_squads]
+        select = Select(placeholder="🔮 Select FIRST kingdom...", options=options)
+        select.callback = self.team1_selected
+        self.add_item(select)
+
+        if len(all_squads) > 25:
+            if page > 1:
+                b = Button(label="← Prev", style=discord.ButtonStyle.secondary); b.callback = self.prev; self.add_item(b)
+            if end < len(all_squads):
+                b = Button(label="Next →", style=discord.ButtonStyle.secondary); b.callback = self.nxt; self.add_item(b)
+
+    async def prev(self, i): await i.response.edit_message(view=MatchPredictorStep1View(self.page - 1))
+    async def nxt(self, i): await i.response.edit_message(view=MatchPredictorStep1View(self.page + 1))
+
+    async def team1_selected(self, interaction):
+        team1 = interaction.data["values"][0]
+        embed = discord.Embed(
+            title="🔮 War Oracle — Step 2",
+            description=f"✅ Kingdom 1: **{SQUADS[team1]} {team1}**\n\nNow select the **opponent**:",
+            color=ROYAL_PURPLE
+        )
+        await interaction.response.edit_message(embed=embed, view=MatchPredictorStep2View(team1))
+
+
+class MatchPredictorStep2View(View):
+    """Step 2: Pick second team and show prediction"""
+    def __init__(self, team1, page=1):
+        super().__init__(timeout=180)
+        self.team1 = team1
+        self.page = page
+        all_squads = sorted(SQUADS.items())
+        start = (page - 1) * 25
+        end = start + 25
+        page_squads = all_squads[start:end]
+
+        options = [discord.SelectOption(label=n, value=n, emoji="🏰", description=f"Tag: {t}") for n, t in page_squads]
+        select = Select(placeholder="🔮 Select OPPONENT kingdom...", options=options)
+        select.callback = self.team2_selected
+        self.add_item(select)
+
+        if len(all_squads) > 25:
+            if page > 1:
+                b = Button(label="← Prev", style=discord.ButtonStyle.secondary); b.callback = self.prev; self.add_item(b)
+            if end < len(all_squads):
+                b = Button(label="Next →", style=discord.ButtonStyle.secondary); b.callback = self.nxt; self.add_item(b)
+
+    async def prev(self, i): await i.response.edit_message(view=MatchPredictorStep2View(self.team1, self.page - 1))
+    async def nxt(self, i): await i.response.edit_message(view=MatchPredictorStep2View(self.team1, self.page + 1))
+
+    async def team2_selected(self, interaction):
+        team2 = interaction.data["values"][0]
+        if team2 == self.team1:
+            await interaction.response.edit_message(content="❌ A kingdom cannot battle itself!", embed=None)
+            return
+
+        pred = predict_match(self.team1, team2)
+
+        # Build visual prediction bars
+        t1_bar = "🟦" * (pred["t1_pct"] // 10) + "⬜" * (10 - pred["t1_pct"] // 10)
+        t2_bar = "🟥" * (pred["t2_pct"] // 10) + "⬜" * (10 - pred["t2_pct"] // 10)
+
+        embed = discord.Embed(
+            title=f"🔮 War Oracle — Match Prediction",
+            description=f"**{SQUADS[self.team1]} {self.team1}** ⚔️ **{SQUADS[team2]} {team2}**\n\n{pred['narrative']}",
+            color=ROYAL_PURPLE
+        )
+
+        embed.add_field(
+            name=f"📊 Win Probabilities",
+            value=(
+                f"🟦 **{self.team1}**: **{pred['t1_pct']}%** {t1_bar}\n"
+                f"🟥 **{team2}**: **{pred['t2_pct']}%** {t2_bar}\n"
+                f"⚖️ **Draw**: **{pred['draw_pct']}%**"
+            ),
+            inline=False
+        )
+
+        if pred["factors"]:
+            embed.add_field(name="🔑 Key Factors", value="\n".join(pred["factors"]), inline=False)
+
+        embed.add_field(name="📡 Confidence", value=f"{pred['confidence']} (based on {sum(1 for _ in squad_data['matches'])} total realm battles)", inline=False)
+        embed.set_footer(text="🔮 The Oracle speaks — but fate is written on the battlefield!")
+        await interaction.response.edit_message(embed=embed, view=None)
+
+
 # -------------------- MODALS --------------------
 class PlayerSetupModal(Modal, title="⚜️ Majestic Profile Setup"):
     ingame_name = TextInput(label="In-Game Name", placeholder="Enter your IGN", required=False, max_length=50)
@@ -713,7 +1101,7 @@ async def show_squad_info(interaction, squad_role, squad_name, tag, public=False
 
 
 class SquadProfileView(View):
-    """Squad profile with history & rivalry buttons"""
+    """Squad profile with history, rivalry & AI analysis buttons"""
     def __init__(self, squad_name):
         super().__init__(timeout=180)
         self.squad_name = squad_name
@@ -731,6 +1119,47 @@ class SquadProfileView(View):
             color=ROYAL_BLUE
         )
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+    @discord.ui.button(label="AI Analysis", emoji="🧠", style=discord.ButtonStyle.success)
+    async def analysis_btn(self, interaction: discord.Interaction, button: Button):
+        report = generate_squad_report(self.squad_name)
+        si = squad_data["squads"].get(self.squad_name, {})
+
+        # Threat bar visual
+        tl = report["threat_level"]
+        threat_bar = "█" * (tl // 10) + "░" * (10 - tl // 10)
+        tier_name, tier_desc = report["threat_tier"]
+
+        embed = discord.Embed(
+            title=f"🧠 Intelligence Report — {SQUADS[self.squad_name]} {self.squad_name}",
+            description=f"{tier_name} — *{tier_desc}*",
+            color=ROYAL_PURPLE
+        )
+
+        embed.add_field(
+            name=f"☠️ Threat Level: {tl}/100",
+            value=f"`{threat_bar}` **{tl}%**",
+            inline=False
+        )
+
+        embed.add_field(name="📈 Form Trend", value=report["form_trend"], inline=False)
+        embed.add_field(name="💪 Strengths", value="\n".join(report["strengths"]), inline=True)
+        embed.add_field(name="⚠️ Weaknesses", value="\n".join(report["weaknesses"]), inline=True)
+
+        if report["rival"]:
+            r = report["rival"]
+            h = r["h2h"]
+            embed.add_field(
+                name=f"🎯 Biggest Rival: {SQUADS.get(r['name'], '?')} {r['name']}",
+                value=f"Met **{r['matches']}** times | Record: {h['squad1_wins']}W-{h['draws']}D-{h['squad2_wins']}L",
+                inline=False
+            )
+
+        if report["insights"]:
+            embed.add_field(name="💡 Insights", value="\n".join(report["insights"]), inline=False)
+
+        embed.set_footer(text="🧠 Majestic AI — Powered by data, driven by glory!")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 async def show_squad_match_history(interaction, squad_name):
@@ -1318,7 +1747,30 @@ class MemberPanelView(View):
     async def fun_btn(self, interaction: discord.Interaction, button: Button):
         await show_fun_stats(interaction)
 
-    @discord.ui.button(label="Leave Kingdom", style=discord.ButtonStyle.danger, emoji="🚪", row=2)
+    @discord.ui.button(label="War Oracle", style=discord.ButtonStyle.primary, emoji="🔮", row=2)
+    async def oracle_btn(self, interaction: discord.Interaction, button: Button):
+        embed = discord.Embed(
+            title="🔮 War Oracle — Match Predictor",
+            description="The Oracle will analyze two kingdoms and predict the outcome!\n\nSelect the **first** kingdom:",
+            color=ROYAL_PURPLE
+        )
+        await interaction.response.send_message(embed=embed, view=MatchPredictorStep1View(), ephemeral=True)
+
+    @discord.ui.button(label="Realm News", style=discord.ButtonStyle.success, emoji="📰", row=2)
+    async def news_btn(self, interaction: discord.Interaction, button: Button):
+        headlines = generate_realm_news()
+        embed = discord.Embed(
+            title="📰 Majestic Realm News",
+            description="*The latest from the chronicles of war!*",
+            color=ROYAL_GOLD
+        )
+        for i, headline in enumerate(headlines[:6]):
+            embed.add_field(name=f"{'📌' if i == 0 else '📄'} {'BREAKING' if i == 0 else f'Story #{i+1}'}", value=headline, inline=False)
+
+        embed.set_footer(text=f"📰 Published {datetime.utcnow().strftime('%b %d, %Y %H:%M')} UTC | Majestic Press")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @discord.ui.button(label="Leave Kingdom", style=discord.ButtonStyle.danger, emoji="🚪", row=3)
     async def leave_btn(self, interaction: discord.Interaction, button: Button):
         role, _ = get_member_squad(interaction.user, interaction.guild)
         if not role:
@@ -1525,7 +1977,35 @@ class RecordBattleStep2View(View):
         if team2 == self.team1:
             await interaction.response.edit_message(content="❌ A kingdom cannot battle itself! Pick a different one.", embed=None, view=RecordBattleStep2View(self.team1, self.page))
             return
-        await interaction.response.send_modal(RecordBattleScoreModal(self.team1, team2))
+
+        # Show AI prediction before score entry
+        pred = predict_match(self.team1, team2)
+        t1_bar = "🟦" * (pred["t1_pct"] // 10) + "⬜" * (10 - pred["t1_pct"] // 10)
+        t2_bar = "🟥" * (pred["t2_pct"] // 10) + "⬜" * (10 - pred["t2_pct"] // 10)
+
+        embed = discord.Embed(
+            title=f"🔮 Pre-Battle Oracle",
+            description=(
+                f"**{SQUADS[self.team1]} {self.team1}** ⚔️ **{SQUADS[team2]} {team2}**\n\n"
+                f"{pred['narrative']}\n\n"
+                f"🟦 {self.team1}: **{pred['t1_pct']}%** {t1_bar}\n"
+                f"🟥 {team2}: **{pred['t2_pct']}%** {t2_bar}\n"
+                f"⚖️ Draw: **{pred['draw_pct']}%**\n\n"
+                f"📡 Confidence: {pred['confidence']}"
+            ),
+            color=ROYAL_PURPLE
+        )
+        embed.set_footer(text="Click below to enter the actual score!")
+
+        # Continue button that opens the score modal
+        view = View(timeout=120)
+        continue_btn = Button(label="📝 Enter Score", style=discord.ButtonStyle.success, emoji="⚔️")
+        async def open_score_modal(btn_interaction):
+            await btn_interaction.response.send_modal(RecordBattleScoreModal(self.team1, team2))
+        continue_btn.callback = open_score_modal
+        view.add_item(continue_btn)
+
+        await interaction.response.edit_message(embed=embed, view=view)
 
 
 class RecordBattleScoreModal(Modal, title="⚔️ Enter Battle Score"):
@@ -1544,6 +2024,9 @@ class RecordBattleScoreModal(Modal, title="⚔️ Enter Battle Score"):
             await interaction.response.send_message("❌ Invalid format. Use X-Y (e.g., 2-0)", ephemeral=True)
             return
 
+        # Pre-match prediction (before stats change)
+        pred = predict_match(self.team1_name, self.team2_name)
+
         team1_data = squad_data["squads"][self.team1_name]
         team2_data = squad_data["squads"][self.team2_name]
 
@@ -1553,12 +2036,14 @@ class RecordBattleScoreModal(Modal, title="⚔️ Enter Battle Score"):
             team2_streak = update_streak(self.team2_name, "loss")
             result_text = f"🏆 **{self.team1_name}** has conquered **{self.team2_name}** in glorious battle!"
             flavor_quote = random.choice(VICTORY_QUOTES)
+            actual_winner = self.team1_name
         elif score2 > score1:
             team2_data["wins"] += 1; team2_data["points"] += 2; team1_data["losses"] += 1
             team1_streak = update_streak(self.team1_name, "loss")
             team2_streak = update_streak(self.team2_name, "win")
             result_text = f"🏆 **{self.team2_name}** has conquered **{self.team1_name}** in glorious battle!"
             flavor_quote = random.choice(VICTORY_QUOTES)
+            actual_winner = self.team2_name
         else:
             team1_data["draws"] += 1; team1_data["points"] += 1
             team2_data["draws"] += 1; team2_data["points"] += 1
@@ -1566,6 +2051,7 @@ class RecordBattleScoreModal(Modal, title="⚔️ Enter Battle Score"):
             team2_streak = update_streak(self.team2_name, "draw")
             result_text = f"⚔️ **{self.team1_name}** and **{self.team2_name}** fought to an honorable stalemate!"
             flavor_quote = random.choice(DRAW_QUOTES)
+            actual_winner = "draw"
 
         team1_achievements = check_achievements(self.team1_name)
         team2_achievements = check_achievements(self.team2_name)
@@ -1609,6 +2095,16 @@ class RecordBattleScoreModal(Modal, title="⚔️ Enter Battle Score"):
                 at += f"🎖️ **{self.team2_name}** earned:\n"
                 for a in team2_achievements: at += f"{a['name']} - *{a['desc']}*\n"
             embed.add_field(name="🏅 New Achievements!", value=at, inline=False)
+
+        # Oracle verdict — was the prediction correct?
+        predicted_winner = self.team1_name if pred["t1_pct"] > pred["t2_pct"] else self.team2_name if pred["t2_pct"] > pred["t1_pct"] else "draw"
+        if actual_winner == "draw" and pred["draw_pct"] >= 20:
+            oracle_text = "🔮✅ The Oracle sensed the balance of power — **Draw predicted!**"
+        elif predicted_winner == actual_winner:
+            oracle_text = f"🔮✅ The Oracle was **RIGHT!** Predicted {predicted_winner} to win ({max(pred['t1_pct'], pred['t2_pct'])}% confidence)"
+        else:
+            oracle_text = f"🔮❌ The Oracle was **WRONG!** Predicted {predicted_winner} ({max(pred['t1_pct'], pred['t2_pct'])}%) — fate had other plans!"
+        embed.add_field(name="🔮 Oracle Verdict", value=oracle_text, inline=False)
 
         embed.set_footer(text=f"Match ID: {match_id} | May glory follow the victorious!")
         await interaction.response.send_message(embed=embed)
@@ -1784,6 +2280,7 @@ class ModeratorPanelView(View):
 
     @discord.ui.button(label="Download Backup", style=discord.ButtonStyle.secondary, emoji="💾", row=2)
     async def backup_btn(self, interaction: discord.Interaction, button: Button):
+
         if not os.path.exists(DATA_FILE):
             await interaction.response.send_message("❌ No data file found.", ephemeral=True)
             return
@@ -1796,6 +2293,15 @@ class ModeratorPanelView(View):
             await log_action(interaction.guild, "💾 Backup", f"{interaction.user.mention} downloaded backup")
         except Exception as e:
             await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
+
+    @discord.ui.button(label="War Oracle", style=discord.ButtonStyle.primary, emoji="🔮", row=2)
+    async def oracle_btn(self, interaction: discord.Interaction, button: Button):
+        embed = discord.Embed(
+            title="🔮 War Oracle — Pre-Battle Analysis",
+            description="Predict the outcome before recording!\n\nSelect the **first** kingdom:",
+            color=ROYAL_PURPLE
+        )
+        await interaction.response.send_message(embed=embed, view=MatchPredictorStep1View(), ephemeral=True)
 
 
 async def show_recent_matches(interaction, limit=10):
@@ -1879,6 +2385,8 @@ class HelpView(View):
             embed.add_field(name="⚜️ My Profile", value="See your warrior profile and stats", inline=False)
             embed.add_field(name="⚙️ Setup Profile", value="Create or update your IGN, ID, rank, and role", inline=False)
             embed.add_field(name="🎲 Fun Stats", value="Interesting realm-wide statistics and trivia", inline=False)
+            embed.add_field(name="🔮 War Oracle", value="AI-powered match predictor — see win probabilities before battles!", inline=False)
+            embed.add_field(name="📰 Realm News", value="Auto-generated news bulletin with latest headlines", inline=False)
             embed.add_field(name="🚪 Leave Kingdom", value="Leave your current kingdom (profile preserved)", inline=False)
             embed.add_field(name="\n📌 Profile Viewing", value="Use `/profile @user` or the **View Profile** button (smart search) to view anyone's profile!", inline=False)
         elif cat == "leader":
@@ -1900,6 +2408,7 @@ class HelpView(View):
             embed.add_field(name="📜 Recent Matches", value="View the last 10 recorded battles", inline=False)
             embed.add_field(name="🗑️ Clear History", value="Select a player to clear their squad transfer history", inline=False)
             embed.add_field(name="💾 Download Backup", value="Download the full data file as JSON", inline=False)
+            embed.add_field(name="🔮 War Oracle", value="AI match prediction before recording battles", inline=False)
         else:  # help
             embed = discord.Embed(title="📜 Majestic Help", description="Quick guide to all commands", color=ROYAL_PURPLE)
             embed.add_field(name="🎯 Slash Commands", value=(
@@ -1909,11 +2418,17 @@ class HelpView(View):
                 "`/profile @user` — View anyone's profile\n"
                 "`/help` — This help menu"
             ), inline=False)
+            embed.add_field(name="🧠 AI Features", value=(
+                "• **🔮 War Oracle** — AI predicts match outcomes with win probabilities\n"
+                "• **🧠 Squad Analysis** — Deep intelligence report on any kingdom\n"
+                "• **📰 Realm News** — Auto-generated news from the chronicles\n"
+                "• **💪 Power Rating** — Every profile shows a calculated power score\n"
+                "• **🔮 Oracle Verdict** — After recording, see if the AI predicted correctly!"
+            ), inline=False)
             embed.add_field(name="💡 Tips", value=(
                 "• **View Profile / Add Member / Give Guest** use smart search — just type part of a name!\n"
                 "• **All mod actions** use dropdowns — no typing squad names needed!\n"
-                "• **Power Ratings** show on profiles — climb the ranks by winning battles!\n"
-                "• **Squad history** lives inside each kingdom's profile (📜 button)\n"
+                "• Browse any kingdom and click **🧠 AI Analysis** for a full intelligence report\n"
                 "• **Rivalries** can be checked from any kingdom's profile (⚔️ button)\n"
                 "• Everything is button & modal-based — minimal typing needed!"
             ), inline=False)
@@ -1942,8 +2457,14 @@ async def member_command(interaction: discord.Interaction):
         color=ROYAL_BLUE
     )
     embed.add_field(name="🌟 Realm", value=f"🏰 {len(SQUADS)} kingdoms • ⚔️ {tm} battles" + (f" • 👑 {top['name']} leads" if top else ""), inline=False)
+
+    # Show player's power rating if they have a profile
+    power, rank_info = calculate_power_rating(interaction.user.id)
+    if power > 0:
+        embed.add_field(name="💪 Your Power", value=f"{rank_info[1]} — **{power}/100**", inline=False)
+
     embed.set_thumbnail(url=interaction.user.display_avatar.url)
-    embed.set_footer(text="⚜️ Use the buttons below!")
+    embed.set_footer(text="⚜️ Powered by Majestic AI • Use the buttons below!")
     await interaction.response.send_message(embed=embed, view=view)
 
 
