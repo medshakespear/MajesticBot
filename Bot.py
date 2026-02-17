@@ -448,6 +448,100 @@ def recalculate_streak(squad_name):
     return {"type": ct, "count": count}
 
 
+# -------------------- SMART MEMBER SEARCH --------------------
+def search_members(guild, query: str):
+    """Fuzzy search guild members by name, display name, or ID."""
+    query = query.strip()
+    results = []
+
+    # Try exact ID match first
+    if query.isdigit():
+        member = guild.get_member(int(query))
+        if member:
+            return [member]
+
+    # Strip leading @ or <@...> mention format
+    if query.startswith("<@") and query.endswith(">"):
+        try:
+            uid = int(query.strip("<@!>"))
+            member = guild.get_member(uid)
+            if member:
+                return [member]
+        except:
+            pass
+
+    q = query.lower()
+    for member in guild.members:
+        if member.bot:
+            continue
+        # Check display name, username, and global name
+        if (q in member.display_name.lower() or
+            q in member.name.lower() or
+            (member.global_name and q in member.global_name.lower())):
+            results.append(member)
+
+    return results[:25]  # Cap at 25 for selector limits
+
+
+# -------------------- POWER RATING --------------------
+RANK_TITLES = [
+    (90, "🔮 Mythical Legend", "A force that reshapes the battlefield!"),
+    (75, "⚡ Elite Warlord", "Fear their name, respect their blade!"),
+    (60, "🛡️ Veteran Knight", "Battle-hardened and unshakeable!"),
+    (45, "⚔️ Rising Warrior", "Growing stronger with every clash!"),
+    (30, "🌱 Promising Squire", "The seeds of greatness are planted!"),
+    (0,  "🐣 Fresh Recruit", "Every legend starts somewhere!"),
+]
+
+def calculate_power_rating(player_id):
+    """Calculate a fun 'power rating' score 0-100 for a player."""
+    stats = get_player_stats(player_id)
+    if not stats or stats["matches_played"] == 0:
+        return 0, RANK_TITLES[-1]
+
+    # Weighted formula: win rate matters most, experience adds bonus
+    wr_score = stats["win_rate"] * 0.7
+    exp_bonus = min(stats["matches_played"] * 0.6, 20)  # Cap at 20
+    streak_bonus = 0
+
+    pk = str(player_id)
+    pd = squad_data["players"].get(pk, {})
+    sn = pd.get("squad")
+    if sn and sn in squad_data["squads"]:
+        cs = squad_data["squads"][sn].get("current_streak", {})
+        if cs.get("type") == "win":
+            streak_bonus = min(cs.get("count", 0) * 2, 10)
+
+    power = min(int(wr_score + exp_bonus + streak_bonus), 100)
+
+    rank_title = RANK_TITLES[-1]
+    for threshold, title, desc in RANK_TITLES:
+        if power >= threshold:
+            rank_title = (threshold, title, desc)
+            break
+
+    return power, rank_title
+
+
+RECRUIT_QUOTES = [
+    "⚔️ A new warrior joins the ranks! The enemy trembles!",
+    "🌟 The kingdom grows stronger! Welcome to glory!",
+    "🔥 Fresh blood on the battlefield! Let the conquest begin!",
+    "👑 Another brave soul answers the call to arms!",
+    "💪 The army expands! Victory draws ever closer!",
+    "🦅 A new eagle joins the flock! Soar to greatness!",
+    "⚡ Power surges through the kingdom's veins!",
+    "🎯 A new blade, sharp and ready for battle!",
+]
+
+GUEST_QUOTES = [
+    "🎭 A noble visitor graces the kingdom with their presence!",
+    "🤝 Alliances strengthen — welcome, honored guest!",
+    "🌐 Diplomacy at its finest! A guest of distinction arrives!",
+    "⭐ The gates open for a worthy traveler!",
+]
+
+
 # -------------------- MODALS --------------------
 class PlayerSetupModal(Modal, title="⚜️ Majestic Profile Setup"):
     ingame_name = TextInput(label="In-Game Name", placeholder="Enter your IGN", required=False, max_length=50)
@@ -671,66 +765,7 @@ async def show_squad_match_history(interaction, squad_name):
 
 
 async def show_player_profile(interaction, member: discord.Member, public=False):
-    pk = str(member.id)
-    pd = squad_data["players"].get(pk)
-    if not pd or not pd.get("ingame_name"):
-        embed = discord.Embed(title="⚜️ Profile Not Found", description=f"{member.mention} hasn't set up their profile yet.", color=ROYAL_BLUE)
-        embed.add_field(name="💡 How to Create", value="Use `/member` → **Setup Profile** to create yours!", inline=False)
-        embed.set_thumbnail(url=member.display_avatar.url)
-        await interaction.response.send_message(embed=embed, ephemeral=not public)
-        return
-
-    sn = pd.get("squad")
-    sr = None; st = "?"
-    if sn and sn in SQUADS:
-        st = SQUADS[sn]
-        sr = discord.utils.get(interaction.guild.roles, name=sn)
-
-    stats = get_player_stats(member.id)
-
-    rs = "⚔️ Warrior"
-    if sn and sn in squad_data["squads"]:
-        si = squad_data["squads"][sn]
-        if member.id in si.get("main_roster", []):
-            rs = "⭐ Main Roster"
-        elif member.id in si.get("subs", []):
-            rs = "🔄 Substitute"
-
-    embed = discord.Embed(
-        title=f"⚜️ {pd.get('ingame_name', 'Unknown')}",
-        description=f"{member.mention}'s warrior profile",
-        color=sr.color if sr else ROYAL_BLUE
-    )
-    embed.add_field(name="⚔️ IGN", value=pd.get('ingame_name', '?'), inline=True)
-    embed.add_field(name="🎯 ID", value=f"#{pd.get('ingame_id', '?')}", inline=True)
-    embed.add_field(name="🏆 Rank", value=pd.get('highest_rank', '?'), inline=True)
-
-    role = pd.get('role', '?')
-    embed.add_field(name="💼 Position", value=f"{ROLE_EMOJIS.get(role, '⚔️')} {role}", inline=True)
-
-    if sn and sn != "Free Agent":
-        embed.add_field(name="🏰 Kingdom", value=f"{st} **{sn}**\n{rs}", inline=True)
-    else:
-        embed.add_field(name="🏰 Kingdom", value="Free Agent", inline=True)
-
-    sh = pd.get("squad_history", [])
-    if sh:
-        ht = "\n".join(f"{SQUADS.get(e.get('squad','?'), '?')} {e.get('squad','?')}" for e in sh[-3:])
-        if len(sh) > 3: ht += f"\n*+{len(sh)-3} more*"
-        embed.add_field(name="📜 Past Kingdoms", value=ht, inline=False)
-
-    if stats and sn and sn != "Free Agent":
-        embed.add_field(
-            name="📊 Stats",
-            value=f"⚔️ {stats['matches_played']} battles | 🏆 {stats['wins']}W ⚔️ {stats['draws']}D 💀 {stats['losses']}L | **{stats['win_rate']:.1f}%** WR",
-            inline=False
-        )
-
-    if is_leader(member):
-        embed.add_field(name="👑 Status", value="**LEADER**", inline=False)
-
-    embed.set_thumbnail(url=member.display_avatar.url)
-    embed.set_footer(text="⚜️ Majestic Archives")
+    embed, _ = build_profile_embed(member, interaction.guild)
     await interaction.response.send_message(embed=embed, ephemeral=not public)
 
 
@@ -1001,9 +1036,9 @@ class MemberSelectorView(View):
 #                     PANEL VIEWS — THE 3 MAIN CATEGORIES
 # =====================================================================
 
-# -------------------- HELPER: send_profile (used by View Profile button) --------------------
-async def send_profile(interaction: discord.Interaction, member: discord.Member):
-    """Send a player profile as a follow-up message (for use after wait_for)."""
+# -------------------- HELPER: show profile embed builder --------------------
+def build_profile_embed(member: discord.Member, guild: discord.Guild):
+    """Build a profile embed for any member. Returns (embed, found_bool)."""
     pk = str(member.id)
     pd = squad_data["players"].get(pk)
     if not pd or not pd.get("ingame_name"):
@@ -1014,16 +1049,16 @@ async def send_profile(interaction: discord.Interaction, member: discord.Member)
         )
         embed.add_field(name="💡 How to Create", value="Use `/member` → **Setup Profile** to create yours!", inline=False)
         embed.set_thumbnail(url=member.display_avatar.url)
-        await interaction.followup.send(embed=embed, ephemeral=True)
-        return
+        return embed, False
 
     sn = pd.get("squad")
     sr = None; st = "?"
     if sn and sn in SQUADS:
         st = SQUADS[sn]
-        sr = discord.utils.get(interaction.guild.roles, name=sn)
+        sr = discord.utils.get(guild.roles, name=sn)
 
     stats = get_player_stats(member.id)
+    power, rank_info = calculate_power_rating(member.id)
 
     rs = "⚔️ Warrior"
     if sn and sn in squad_data["squads"]:
@@ -1035,7 +1070,7 @@ async def send_profile(interaction: discord.Interaction, member: discord.Member)
 
     embed = discord.Embed(
         title=f"⚜️ {pd.get('ingame_name', 'Unknown')}",
-        description=f"{member.mention}'s warrior profile",
+        description=f"{member.mention}'s warrior profile\n{rank_info[1]} — *{rank_info[2]}*",
         color=sr.color if sr else ROYAL_BLUE
     )
     embed.add_field(name="⚔️ IGN", value=pd.get('ingame_name', '?'), inline=True)
@@ -1044,6 +1079,7 @@ async def send_profile(interaction: discord.Interaction, member: discord.Member)
 
     role = pd.get('role', '?')
     embed.add_field(name="💼 Position", value=f"{ROLE_EMOJIS.get(role, '⚔️')} {role}", inline=True)
+    embed.add_field(name="💪 Power Rating", value=f"**{power}/100** {'█' * (power // 10)}{'░' * (10 - power // 10)}", inline=True)
 
     if sn and sn != "Free Agent":
         embed.add_field(name="🏰 Kingdom", value=f"{st} **{sn}**\n{rs}", inline=True)
@@ -1058,7 +1094,7 @@ async def send_profile(interaction: discord.Interaction, member: discord.Member)
 
     if stats and sn and sn != "Free Agent":
         embed.add_field(
-            name="📊 Stats",
+            name="📊 Battle Record",
             value=f"⚔️ {stats['matches_played']} battles | 🏆 {stats['wins']}W ⚔️ {stats['draws']}D 💀 {stats['losses']}L | **{stats['win_rate']:.1f}%** WR",
             inline=False
         )
@@ -1068,7 +1104,166 @@ async def send_profile(interaction: discord.Interaction, member: discord.Member)
 
     embed.set_thumbnail(url=member.display_avatar.url)
     embed.set_footer(text="⚜️ Majestic Archives")
-    await interaction.followup.send(embed=embed, ephemeral=True)
+    return embed, True
+
+
+# -------------------- SEARCH MEMBER MODAL SYSTEM --------------------
+class SearchMemberModal(Modal, title="🔍 Search Member"):
+    """Modal that takes a search query and shows matching members."""
+    search_query = TextInput(
+        label="Enter name, display name, or ID",
+        placeholder="e.g., John, Shadow, 123456789",
+        required=True,
+        max_length=100
+    )
+
+    def __init__(self, purpose: str, **kwargs):
+        super().__init__()
+        self.purpose = purpose  # "view_profile", "add_member", "give_guest"
+        self.extra = kwargs     # squad_name, squad_role, etc.
+        # Custom titles per purpose
+        if purpose == "view_profile":
+            self.title = "👤 Search Warrior Profile"
+            self.search_query.label = "Who do you seek?"
+            self.search_query.placeholder = "Enter their name or ID..."
+        elif purpose == "add_member":
+            self.title = "➕ Search Warrior to Recruit"
+            self.search_query.label = "Who shall join your ranks?"
+            self.search_query.placeholder = "Enter their name or ID..."
+        elif purpose == "give_guest":
+            self.title = "🎭 Search Guest to Honor"
+            self.search_query.label = "Who deserves guest access?"
+            self.search_query.placeholder = "Enter their name or ID..."
+
+    async def on_submit(self, interaction: discord.Interaction):
+        results = search_members(interaction.guild, self.search_query.value)
+
+        if not results:
+            embed = discord.Embed(
+                title="🔍 No Warriors Found",
+                description=f"No members matching **{self.search_query.value}** were found.\nTry a different name or check the spelling!",
+                color=ROYAL_RED
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        if len(results) == 1:
+            # Single match — act immediately
+            member = results[0]
+            await self._execute_action(interaction, member)
+        else:
+            # Multiple matches — show selector
+            view = SearchResultSelectorView(results, self.purpose, **self.extra)
+            embed = discord.Embed(
+                title=f"🔍 Found {len(results)} Warriors",
+                description=f"Multiple matches for **{self.search_query.value}**\nSelect the correct warrior below:",
+                color=ROYAL_BLUE
+            )
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+    async def _execute_action(self, interaction, member):
+        if self.purpose == "view_profile":
+            embed, _ = build_profile_embed(member, interaction.guild)
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        elif self.purpose == "add_member":
+            squad_name = self.extra.get("squad_name")
+            squad_role = self.extra.get("squad_role")
+            guild = interaction.guild
+
+            # Check if already in this squad
+            existing_role, _ = get_member_squad(member, guild)
+            if existing_role and existing_role.name == squad_name:
+                await interaction.response.send_message(
+                    f"⚠️ {member.mention} is already in **{squad_name}**!", ephemeral=True)
+                return
+
+            # Remove any old squad role
+            for sn in SQUADS:
+                role = discord.utils.get(guild.roles, name=sn)
+                if role and role in member.roles:
+                    await member.remove_roles(role)
+
+            await member.add_roles(squad_role)
+            await safe_nick_update(member, squad_role, SQUADS[squad_name])
+            update_player_squad(member.id, squad_name, existing_role.name if existing_role else None)
+
+            quote = random.choice(RECRUIT_QUOTES)
+            embed = discord.Embed(
+                title="➕ Warrior Recruited!",
+                description=f"{member.mention} has joined **{SQUADS[squad_name]} {squad_name}**!\n\n*{quote}*",
+                color=ROYAL_GREEN
+            )
+            embed.set_thumbnail(url=member.display_avatar.url)
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await log_action(guild, "➕ Member Added", f"{interaction.user.mention} recruited {member.mention} to **{squad_name}**")
+
+        elif self.purpose == "give_guest":
+            squad_name = self.extra.get("squad_name")
+            grn = GUEST_ROLES.get(squad_name)
+            if not grn:
+                await interaction.response.send_message("❌ No guest role configured for this kingdom.", ephemeral=True)
+                return
+            gr = discord.utils.get(interaction.guild.roles, name=grn)
+            if not gr:
+                await interaction.response.send_message(f"❌ Guest role '{grn}' not found in server.", ephemeral=True)
+                return
+
+            if gr in member.roles:
+                await interaction.response.send_message(
+                    f"⚠️ {member.mention} already has guest access to **{squad_name}**!", ephemeral=True)
+                return
+
+            await member.add_roles(gr)
+            quote = random.choice(GUEST_QUOTES)
+            embed = discord.Embed(
+                title="🎭 Guest Access Granted!",
+                description=f"{member.mention} is now a guest of **{SQUADS[squad_name]} {squad_name}**!\n\n*{quote}*",
+                color=ROYAL_GREEN
+            )
+            embed.set_thumbnail(url=member.display_avatar.url)
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await log_action(interaction.guild, "🎭 Guest Added", f"{interaction.user.mention} gave {member.mention} guest access to **{squad_name}**")
+
+
+class SearchResultSelectorView(View):
+    """Dropdown to pick from multiple search results."""
+    def __init__(self, members: list, purpose: str, **kwargs):
+        super().__init__(timeout=120)
+        self.purpose = purpose
+        self.extra = kwargs
+        self.member_map = {}
+
+        options = []
+        for m in members[:25]:
+            self.member_map[str(m.id)] = m
+            role, tag = get_member_squad(m, m.guild)
+            squad_info = f"{tag} {role.name}" if role else "Free Agent"
+            options.append(discord.SelectOption(
+                label=m.display_name[:100],
+                value=str(m.id),
+                description=f"@{m.name} • {squad_info}"[:100],
+                emoji="👤"
+            ))
+
+        select = Select(placeholder="👤 Select the warrior...", options=options)
+        select.callback = self.member_selected
+        self.add_item(select)
+
+    async def member_selected(self, interaction):
+        member_id = interaction.data["values"][0]
+        member = self.member_map.get(member_id)
+        if not member:
+            member = interaction.guild.get_member(int(member_id))
+        if not member:
+            await interaction.response.edit_message(content="❌ Member not found.", embed=None, view=None)
+            return
+
+        # Create a temporary modal-like object to reuse the execute logic
+        handler = SearchMemberModal.__new__(SearchMemberModal)
+        handler.purpose = self.purpose
+        handler.extra = self.extra
+        await handler._execute_action(interaction, member)
 
 
 # -------------------- 1. MAJESTIC MEMBER PANEL --------------------
@@ -1097,30 +1292,7 @@ class MemberPanelView(View):
 
     @discord.ui.button(label="View Profile", emoji="👤", style=discord.ButtonStyle.primary, row=0)
     async def view_profile(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message(
-            f"📌 {interaction.user.mention}, reply to this message and **mention the member** whose profile you want to view."
-        )
-
-        prompt_msg = await interaction.original_response()
-
-        def check(m):
-            return (
-                m.author.id == interaction.user.id
-                and m.reference
-                and m.reference.message_id == prompt_msg.id
-                and len(m.mentions) == 1
-            )
-
-        try:
-            msg = await bot.wait_for("message", timeout=60, check=check)
-        except asyncio.TimeoutError:
-            await prompt_msg.edit(content="⏰ Timed out. Use the button again.")
-            return
-
-        member = msg.mentions[0]
-        await msg.delete()
-
-        await send_profile(interaction, member)
+        await interaction.response.send_modal(SearchMemberModal("view_profile"))
 
     @discord.ui.button(label="My Kingdom", style=discord.ButtonStyle.success, emoji="🛡️", row=1)
     async def my_squad_btn(self, interaction: discord.Interaction, button: Button):
@@ -1225,51 +1397,8 @@ class LeaderPanelView(View):
 
     @discord.ui.button(label="Add Member", emoji="➕", style=discord.ButtonStyle.success, row=0)
     async def add_member_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message(
-            f"📌 {interaction.user.mention}, reply to this message and **mention the member** you want to add."
-        )
-
-        prompt_msg = await interaction.original_response()
-
-        def check(m):
-            return (
-                m.author.id == interaction.user.id
-                and m.reference
-                and m.reference.message_id == prompt_msg.id
-                and len(m.mentions) == 1
-            )
-
-        try:
-            msg = await bot.wait_for("message", timeout=60, check=check)
-        except asyncio.TimeoutError:
-            await prompt_msg.edit(content="⏰ Timed out. Use the button again.")
-            return
-
-        member = msg.mentions[0]
-        guild = interaction.guild
-
-        # Remove any old squad role
-        for sn in SQUADS:
-            role = discord.utils.get(guild.roles, name=sn)
-            if role and role in member.roles:
-                await member.remove_roles(role)
-
-        # Give ONLY the squad role (not leader)
-        await member.add_roles(self.squad_role)
-
-        await safe_nick_update(member, self.squad_role, SQUADS[self.squad_name])
-
-        old_role, _ = get_member_squad(member, guild)
-        update_player_squad(
-            member.id,
-            self.squad_name,
-            old_role.name if old_role else None
-        )
-
-        await msg.delete()
-
-        await prompt_msg.edit(
-            content=f"✅ {member.mention} added to **{self.squad_name}**."
+        await interaction.response.send_modal(
+            SearchMemberModal("add_member", squad_name=self.squad_name, squad_role=self.squad_role)
         )
 
     @discord.ui.button(label="Remove Member", emoji="➖", style=discord.ButtonStyle.danger, row=0)
@@ -1314,47 +1443,8 @@ class LeaderPanelView(View):
 
     @discord.ui.button(label="Give Guest", emoji="🎭", style=discord.ButtonStyle.success, row=3)
     async def give_guest_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message(
-            f"📌 {interaction.user.mention}, reply to this message and **mention the member** you want to give guest access."
-        )
-
-        prompt_msg = await interaction.original_response()
-
-        def check(m):
-            return (
-                m.author.id == interaction.user.id
-                and m.reference
-                and m.reference.message_id == prompt_msg.id
-                and len(m.mentions) == 1
-            )
-
-        try:
-            msg = await bot.wait_for("message", timeout=60, check=check)
-        except asyncio.TimeoutError:
-            await prompt_msg.edit(content="⏰ Timed out. Use the button again.")
-            return
-
-        member = msg.mentions[0]
-
-        # Look up the correct guest role for this squad
-        grn = GUEST_ROLES.get(self.squad_name)
-        if not grn:
-            await prompt_msg.edit(content="❌ No guest role configured for this kingdom.")
-            await msg.delete()
-            return
-
-        gr = discord.utils.get(interaction.guild.roles, name=grn)
-        if not gr:
-            await prompt_msg.edit(content=f"❌ Guest role '{grn}' not found in server.")
-            await msg.delete()
-            return
-
-        await member.add_roles(gr)
-
-        await msg.delete()
-
-        await prompt_msg.edit(
-            content=f"✅ {member.mention} is now a **{self.squad_name}** guest."
+        await interaction.response.send_modal(
+            SearchMemberModal("give_guest", squad_name=self.squad_name)
         )
 
     @discord.ui.button(label="Remove Guest", emoji="❌", style=discord.ButtonStyle.secondary, row=3)
@@ -1784,21 +1874,21 @@ class HelpView(View):
             embed = discord.Embed(title="👥 Majestic Member", description="Everything accessible from `/member`", color=ROYAL_BLUE)
             embed.add_field(name="🏰 Browse Kingdoms", value="Explore any kingdom's profile, roster, and match history", inline=False)
             embed.add_field(name="🏆 Rankings", value="View the full leaderboard with points and win rates", inline=False)
-            embed.add_field(name="👤 View Profile", value="View anyone's profile — bot sends a public message, reply to it mentioning the member", inline=False)
+            embed.add_field(name="👤 View Profile", value="Search any warrior by name and view their full profile with power rating", inline=False)
             embed.add_field(name="🛡️ My Kingdom", value="View your own kingdom's detailed profile", inline=False)
             embed.add_field(name="⚜️ My Profile", value="See your warrior profile and stats", inline=False)
             embed.add_field(name="⚙️ Setup Profile", value="Create or update your IGN, ID, rank, and role", inline=False)
             embed.add_field(name="🎲 Fun Stats", value="Interesting realm-wide statistics and trivia", inline=False)
             embed.add_field(name="🚪 Leave Kingdom", value="Leave your current kingdom (profile preserved)", inline=False)
-            embed.add_field(name="\n📌 Profile Viewing", value="Use `/profile @user` or the **View Profile** button to view anyone's profile!", inline=False)
+            embed.add_field(name="\n📌 Profile Viewing", value="Use `/profile @user` or the **View Profile** button (smart search) to view anyone's profile!", inline=False)
         elif cat == "leader":
             embed = discord.Embed(title="👑 Majestic Leader", description="Everything accessible from `/leader`", color=ROYAL_GOLD)
-            embed.add_field(name="➕ Add Member", value="Reply with @mention to recruit (public message)", inline=True)
+            embed.add_field(name="➕ Add Member", value="Search by name to recruit warriors", inline=True)
             embed.add_field(name="➖ Remove Member", value="Select from dropdown to dismiss", inline=True)
             embed.add_field(name="⭐ Set Main (5 max)", value="Select from dropdown for main roster", inline=True)
             embed.add_field(name="🔄 Set Sub (3 max)", value="Select from dropdown for substitutes", inline=True)
             embed.add_field(name="👑 Promote Leader", value="Select from dropdown to promote", inline=True)
-            embed.add_field(name="🎭 Give Guest", value="Reply with @mention to add guest (public message)", inline=True)
+            embed.add_field(name="🎭 Give Guest", value="Search by name to grant guest access", inline=True)
             embed.add_field(name="❌ Remove Guest", value="Select from dropdown to revoke guest", inline=True)
             embed.add_field(name="🖼️ Set Logo", value="Update your kingdom's emblem", inline=True)
             embed.add_field(name="🏰 View Kingdom", value="See your kingdom's full profile", inline=True)
@@ -1820,11 +1910,12 @@ class HelpView(View):
                 "`/help` — This help menu"
             ), inline=False)
             embed.add_field(name="💡 Tips", value=(
-                "• **Add Member / Give Guest / View Profile** send a public message — reply to it with @mention\n"
+                "• **View Profile / Add Member / Give Guest** use smart search — just type part of a name!\n"
                 "• **All mod actions** use dropdowns — no typing squad names needed!\n"
+                "• **Power Ratings** show on profiles — climb the ranks by winning battles!\n"
                 "• **Squad history** lives inside each kingdom's profile (📜 button)\n"
                 "• **Rivalries** can be checked from any kingdom's profile (⚔️ button)\n"
-                "• Everything is button-based — minimal typing needed!"
+                "• Everything is button & modal-based — minimal typing needed!"
             ), inline=False)
 
         embed.set_footer(text="⚜️ Majestic Bot — May glory guide your path!")
