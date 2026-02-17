@@ -169,6 +169,7 @@ ACHIEVEMENTS = {
 
 # -------------------- DATA MANAGEMENT --------------------
 def load_data():
+    global ALL_TAGS
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, 'r', encoding='utf-8') as f:
             data = json.load(f)
@@ -177,9 +178,15 @@ def load_data():
                     match["team1_participants"] = []
                 if "team2_participants" not in match:
                     match["team2_participants"] = []
+            # Load dynamic squads added via /mod
+            for sn, info in data.get("dynamic_squads", {}).items():
+                SQUADS[sn] = info["tag"]
+                if info.get("guest_role"):
+                    GUEST_ROLES[sn] = info["guest_role"]
+            ALL_TAGS = list(SQUADS.values())
             return data
 
-    data = {"squads": {}, "players": {}, "matches": []}
+    data = {"squads": {}, "players": {}, "matches": [], "dynamic_squads": {}}
     for squad_name in SQUADS.keys():
         data["squads"][squad_name] = {
             "wins": 0, "draws": 0, "losses": 0, "points": 0,
@@ -195,6 +202,101 @@ def load_data():
 def save_data(data):
     with open(DATA_FILE, 'w', encoding='utf-8') as f:
         json.dump(data, indent=2, fp=f, ensure_ascii=False)
+
+
+def init_squad_data(squad_name):
+    """Initialize squad stats entry if missing."""
+    if squad_name not in squad_data["squads"]:
+        squad_data["squads"][squad_name] = {
+            "wins": 0, "draws": 0, "losses": 0, "points": 0,
+            "titles": [], "championship_wins": 0, "logo_url": None,
+            "main_roster": [], "subs": [], "match_history": [],
+            "current_streak": {"type": "none", "count": 0},
+            "achievements": [], "biggest_win_streak": 0, "biggest_loss_streak": 0
+        }
+
+
+async def add_new_squad(guild, squad_name: str, tag: str, guest_role_name: str = None):
+    """Create a new squad: Discord role + guest role + data entries."""
+    global ALL_TAGS
+
+    # Create the squad Discord role
+    squad_role = discord.utils.get(guild.roles, name=squad_name)
+    if not squad_role:
+        squad_role = await guild.create_role(
+            name=squad_name,
+            mentionable=True,
+            reason=f"Majestic Bot: New kingdom '{squad_name}' created"
+        )
+
+    # Create the guest Discord role
+    guest_role = None
+    if guest_role_name:
+        guest_role = discord.utils.get(guild.roles, name=guest_role_name)
+        if not guest_role:
+            guest_role = await guild.create_role(
+                name=guest_role_name,
+                mentionable=False,
+                reason=f"Majestic Bot: Guest role for '{squad_name}'"
+            )
+
+    # Update runtime dicts
+    SQUADS[squad_name] = tag
+    if guest_role_name:
+        GUEST_ROLES[squad_name] = guest_role_name
+    ALL_TAGS = list(SQUADS.values())
+
+    # Persist to data
+    if "dynamic_squads" not in squad_data:
+        squad_data["dynamic_squads"] = {}
+    squad_data["dynamic_squads"][squad_name] = {
+        "tag": tag,
+        "guest_role": guest_role_name or ""
+    }
+
+    init_squad_data(squad_name)
+    save_data(squad_data)
+
+    return squad_role, guest_role
+
+
+async def remove_existing_squad(guild, squad_name: str, delete_roles: bool = True):
+    """Remove a squad: optionally delete Discord roles, clean up data."""
+    global ALL_TAGS
+
+    if delete_roles:
+        # Delete squad role
+        role = discord.utils.get(guild.roles, name=squad_name)
+        if role:
+            try:
+                await role.delete(reason=f"Majestic Bot: Kingdom '{squad_name}' disbanded")
+            except:
+                pass
+
+        # Delete guest role
+        grn = GUEST_ROLES.get(squad_name)
+        if grn:
+            gr = discord.utils.get(guild.roles, name=grn)
+            if gr:
+                try:
+                    await gr.delete(reason=f"Majestic Bot: Guest role for '{squad_name}' removed")
+                except:
+                    pass
+
+    # Remove from runtime dicts
+    SQUADS.pop(squad_name, None)
+    GUEST_ROLES.pop(squad_name, None)
+    ALL_TAGS = list(SQUADS.values())
+
+    # Remove from dynamic storage
+    if "dynamic_squads" in squad_data:
+        squad_data["dynamic_squads"].pop(squad_name, None)
+
+    # Keep squad_data["squads"] entry for historical records but mark disbanded
+    if squad_name in squad_data["squads"]:
+        squad_data["squads"][squad_name]["disbanded"] = True
+
+    save_data(squad_data)
 
 
 squad_data = load_data()
@@ -278,6 +380,8 @@ def update_player_squad(player_id, new_squad=None, old_squad=None):
 def get_squad_ranking():
     rankings = []
     for squad_name, data in squad_data["squads"].items():
+        if squad_name not in SQUADS or data.get("disbanded"):
+            continue
         total = data["wins"] + data["draws"] + data["losses"]
         wr = (data["wins"] / total * 100) if total > 0 else 0.0
         rankings.append({
@@ -2246,6 +2350,153 @@ class DeleteMatchSelectorView(View):
         await interaction.response.edit_message(embed=embed, view=view)
 
 
+# --- Add Squad: Modal for name, tag, guest role ---
+class AddSquadModal(Modal, title="🏰 Create New Kingdom"):
+    squad_name = TextInput(label="Kingdom Name", placeholder="e.g., Phoenix Flames", required=True, max_length=50)
+    squad_tag = TextInput(label="Tag (prefix for nicknames)", placeholder="e.g., PF, 🔥, etc.", required=True, max_length=10)
+    guest_role_name = TextInput(label="Guest Role Name (optional)", placeholder="e.g., Phoenix.Flames_guest", required=False, max_length=50)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        name = self.squad_name.value.strip()
+        tag = self.squad_tag.value.strip()
+        grn = self.guest_role_name.value.strip() if self.guest_role_name.value else None
+
+        # Validate
+        if name in SQUADS:
+            await interaction.response.send_message(f"❌ Kingdom **{name}** already exists!", ephemeral=True)
+            return
+        if tag in ALL_TAGS:
+            await interaction.response.send_message(f"❌ Tag `{tag}` is already used by another kingdom!", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            squad_role, guest_role = await add_new_squad(interaction.guild, name, tag, grn)
+
+            embed = discord.Embed(
+                title="🏰 New Kingdom Founded!",
+                description=f"**{tag} {name}** has risen from the ashes!",
+                color=ROYAL_GREEN
+            )
+            embed.add_field(name="🏴 Tag", value=f"`{tag}`", inline=True)
+            embed.add_field(name="📜 Role", value=squad_role.mention if squad_role else "Created", inline=True)
+            if guest_role:
+                embed.add_field(name="🎭 Guest Role", value=guest_role.mention, inline=True)
+            embed.add_field(
+                name="📋 Next Steps",
+                value="• Assign the kingdom role to members\n• Leaders can use `/leader` to manage\n• The kingdom appears in all dropdowns now!",
+                inline=False
+            )
+            embed.set_footer(text="⚜️ A new chapter begins in the realm chronicles!")
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            await log_action(interaction.guild, "🏰 Kingdom Founded",
+                f"{interaction.user.mention} created **{tag} {name}**" + (f" with guest role `{grn}`" if grn else ""))
+
+        except discord.Forbidden:
+            await interaction.followup.send("❌ Bot lacks permission to create roles. Check bot role hierarchy!", ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f"❌ Error: {e}", ephemeral=True)
+
+
+class RemoveSquadSelectorView(View):
+    """Select a squad to remove/disband."""
+    def __init__(self, page=1):
+        super().__init__(timeout=180)
+        self.page = page
+        all_squads = sorted(SQUADS.items())
+        start = (page - 1) * 25
+        end = start + 25
+        page_squads = all_squads[start:end]
+
+        options = [discord.SelectOption(label=n, value=n, emoji="🏰", description=f"Tag: {t}") for n, t in page_squads]
+        select = Select(placeholder="⚠️ Select kingdom to disband...", options=options)
+        select.callback = self.squad_selected
+        self.add_item(select)
+
+        if len(all_squads) > 25:
+            if page > 1:
+                b = Button(label="← Prev", style=discord.ButtonStyle.secondary); b.callback = self.prev; self.add_item(b)
+            if end < len(all_squads):
+                b = Button(label="Next →", style=discord.ButtonStyle.secondary); b.callback = self.nxt; self.add_item(b)
+
+    async def prev(self, i): await i.response.edit_message(view=RemoveSquadSelectorView(self.page - 1))
+    async def nxt(self, i): await i.response.edit_message(view=RemoveSquadSelectorView(self.page + 1))
+
+    async def squad_selected(self, interaction):
+        squad_name = interaction.data["values"][0]
+        si = squad_data["squads"].get(squad_name, {})
+        member_count = 0
+        role = discord.utils.get(interaction.guild.roles, name=squad_name)
+        if role:
+            member_count = len(role.members)
+
+        w, d, l = si.get("wins", 0), si.get("draws", 0), si.get("losses", 0)
+
+        embed = discord.Embed(
+            title=f"⚠️ Disband {SQUADS.get(squad_name, '?')} {squad_name}?",
+            description=(
+                f"**This will permanently remove this kingdom!**\n\n"
+                f"👥 **{member_count}** members will lose their kingdom role\n"
+                f"📊 Record: {w}W-{d}D-{l}L ({si.get('points', 0)} pts)\n"
+                f"🏆 {si.get('championship_wins', 0)} championship(s)\n\n"
+                f"⚠️ Match history will be preserved but the kingdom will be gone."
+            ),
+            color=ROYAL_RED
+        )
+
+        view = View(timeout=60)
+
+        async def confirm_delete_roles(ci):
+            if ci.user.id != interaction.user.id:
+                return await ci.response.send_message("❌ Not yours.", ephemeral=True)
+            await ci.response.defer(ephemeral=True)
+            try:
+                await remove_existing_squad(ci.guild, squad_name, delete_roles=True)
+                done = discord.Embed(
+                    title="💀 Kingdom Disbanded",
+                    description=f"**{squad_name}** has fallen. Its roles have been destroyed.\n\n*The chronicles remember what once was...*",
+                    color=ROYAL_RED
+                )
+                await ci.followup.send(embed=done, ephemeral=True)
+                await log_action(ci.guild, "💀 Kingdom Disbanded",
+                    f"{ci.user.mention} disbanded **{squad_name}** (roles deleted, {member_count} members affected)")
+            except Exception as e:
+                await ci.followup.send(f"❌ Error: {e}", ephemeral=True)
+
+        async def confirm_keep_roles(ci):
+            if ci.user.id != interaction.user.id:
+                return await ci.response.send_message("❌ Not yours.", ephemeral=True)
+            await ci.response.defer(ephemeral=True)
+            try:
+                await remove_existing_squad(ci.guild, squad_name, delete_roles=False)
+                done = discord.Embed(
+                    title="📋 Kingdom Removed (Roles Kept)",
+                    description=f"**{squad_name}** removed from the bot but Discord roles are preserved.\nYou can delete them manually if needed.",
+                    color=ROYAL_GOLD
+                )
+                await ci.followup.send(embed=done, ephemeral=True)
+                await log_action(ci.guild, "📋 Kingdom Removed",
+                    f"{ci.user.mention} removed **{squad_name}** from bot (roles kept)")
+            except Exception as e:
+                await ci.followup.send(f"❌ Error: {e}", ephemeral=True)
+
+        async def cancel(ci):
+            if ci.user.id != interaction.user.id:
+                return await ci.response.send_message("❌ Not yours.", ephemeral=True)
+            await ci.response.edit_message(content="✅ Cancelled.", embed=None, view=None)
+
+        b1 = Button(label="Delete + Roles", style=discord.ButtonStyle.danger, emoji="💀")
+        b1.callback = confirm_delete_roles
+        b2 = Button(label="Remove (Keep Roles)", style=discord.ButtonStyle.primary, emoji="📋")
+        b2.callback = confirm_keep_roles
+        b3 = Button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="✗")
+        b3.callback = cancel
+        view.add_item(b1); view.add_item(b2); view.add_item(b3)
+
+        await interaction.response.edit_message(embed=embed, view=view)
+
+
 class ModeratorPanelView(View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -2302,6 +2553,22 @@ class ModeratorPanelView(View):
             color=ROYAL_PURPLE
         )
         await interaction.response.send_message(embed=embed, view=MatchPredictorStep1View(), ephemeral=True)
+
+    @discord.ui.button(label="Add Kingdom", style=discord.ButtonStyle.success, emoji="🏰", row=3)
+    async def add_squad_btn(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.send_modal(AddSquadModal())
+
+    @discord.ui.button(label="Remove Kingdom", style=discord.ButtonStyle.danger, emoji="💀", row=3)
+    async def remove_squad_btn(self, interaction: discord.Interaction, button: Button):
+        if not SQUADS:
+            await interaction.response.send_message("❌ No kingdoms to remove.", ephemeral=True)
+            return
+        embed = discord.Embed(
+            title="💀 Disband Kingdom",
+            description="⚠️ **This is a dangerous action!**\nSelect the kingdom to disband:",
+            color=ROYAL_RED
+        )
+        await interaction.response.send_message(embed=embed, view=RemoveSquadSelectorView(), ephemeral=True)
 
 
 async def show_recent_matches(interaction, limit=10):
@@ -2409,6 +2676,8 @@ class HelpView(View):
             embed.add_field(name="🗑️ Clear History", value="Select a player to clear their squad transfer history", inline=False)
             embed.add_field(name="💾 Download Backup", value="Download the full data file as JSON", inline=False)
             embed.add_field(name="🔮 War Oracle", value="AI match prediction before recording battles", inline=False)
+            embed.add_field(name="🏰 Add Kingdom", value="Create a new kingdom with squad role, tag, and guest role", inline=False)
+            embed.add_field(name="💀 Remove Kingdom", value="Disband a kingdom — optionally delete Discord roles too", inline=False)
         else:  # help
             embed = discord.Embed(title="📜 Majestic Help", description="Quick guide to all commands", color=ROYAL_PURPLE)
             embed.add_field(name="🎯 Slash Commands", value=(
