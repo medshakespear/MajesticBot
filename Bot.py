@@ -2409,92 +2409,114 @@ class RemoveSquadSelectorView(View):
         end = start + 25
         page_squads = all_squads[start:end]
 
-        options = [discord.SelectOption(label=n, value=n, emoji="🏰", description=f"Tag: {t}") for n, t in page_squads]
-        select = Select(placeholder="⚠️ Select kingdom to disband...", options=options)
+        if not page_squads:
+            return
+
+        options = [discord.SelectOption(label=n, value=n, description=f"Tag: {t}") for n, t in page_squads]
+        select = Select(placeholder="Select kingdom to disband...", options=options)
         select.callback = self.squad_selected
         self.add_item(select)
 
-        if len(all_squads) > 25:
+        total_pages = (len(all_squads) + 24) // 25
+        if total_pages > 1:
             if page > 1:
-                b = Button(label="← Prev", style=discord.ButtonStyle.secondary); b.callback = self.prev; self.add_item(b)
-            if end < len(all_squads):
-                b = Button(label="Next →", style=discord.ButtonStyle.secondary); b.callback = self.nxt; self.add_item(b)
+                b = Button(label="← Prev", style=discord.ButtonStyle.secondary)
+                b.callback = self.prev
+                self.add_item(b)
+            if page < total_pages:
+                b = Button(label="Next →", style=discord.ButtonStyle.secondary)
+                b.callback = self.nxt
+                self.add_item(b)
 
-    async def prev(self, i): await i.response.edit_message(view=RemoveSquadSelectorView(self.page - 1))
-    async def nxt(self, i): await i.response.edit_message(view=RemoveSquadSelectorView(self.page + 1))
+    async def prev(self, interaction):
+        embed = discord.Embed(title="💀 Disband Kingdom", description="⚠️ **This is a dangerous action!**\nSelect the kingdom to disband:", color=ROYAL_RED)
+        await interaction.response.edit_message(embed=embed, view=RemoveSquadSelectorView(self.page - 1))
+
+    async def nxt(self, interaction):
+        embed = discord.Embed(title="💀 Disband Kingdom", description="⚠️ **This is a dangerous action!**\nSelect the kingdom to disband:", color=ROYAL_RED)
+        await interaction.response.edit_message(embed=embed, view=RemoveSquadSelectorView(self.page + 1))
 
     async def squad_selected(self, interaction):
-        squad_name = interaction.data["values"][0]
-        si = squad_data["squads"].get(squad_name, {})
-        member_count = 0
-        role = discord.utils.get(interaction.guild.roles, name=squad_name)
-        if role:
-            member_count = len(role.members)
+        try:
+            squad_name = interaction.data["values"][0]
+            si = squad_data["squads"].get(squad_name, {})
+            member_count = 0
+            role = discord.utils.get(interaction.guild.roles, name=squad_name)
+            if role:
+                member_count = len(role.members)
 
-        w, d, l = si.get("wins", 0), si.get("draws", 0), si.get("losses", 0)
+            w = si.get("wins", 0)
+            d = si.get("draws", 0)
+            l = si.get("losses", 0)
 
-        embed = discord.Embed(
-            title=f"⚠️ Disband {SQUADS.get(squad_name, '?')} {squad_name}?",
-            description=(
-                f"**This will permanently remove this kingdom!**\n\n"
-                f"👥 **{member_count}** members will lose their kingdom role\n"
-                f"📊 Record: {w}W-{d}D-{l}L ({si.get('points', 0)} pts)\n"
-                f"🏆 {si.get('championship_wins', 0)} championship(s)\n\n"
-                f"⚠️ Match history will be preserved but the kingdom will be gone."
-            ),
-            color=ROYAL_RED
-        )
+            embed = discord.Embed(
+                title=f"⚠️ Disband {SQUADS.get(squad_name, '?')} {squad_name}?",
+                description=(
+                    f"**This will permanently remove this kingdom!**\n\n"
+                    f"👥 **{member_count}** members will lose their kingdom role\n"
+                    f"📊 Record: {w}W-{d}D-{l}L ({si.get('points', 0)} pts)\n"
+                    f"🏆 {si.get('championship_wins', 0)} championship(s)\n\n"
+                    f"⚠️ Match history will be preserved but the kingdom will be gone."
+                ),
+                color=ROYAL_RED
+            )
 
-        view = View(timeout=60)
-
-        async def confirm_delete_roles(ci):
-            if ci.user.id != interaction.user.id:
-                return await ci.response.send_message("❌ Not yours.", ephemeral=True)
-            await ci.response.defer(ephemeral=True)
+            view = RemoveConfirmView(squad_name, member_count, interaction.user.id)
+            await interaction.response.edit_message(embed=embed, view=view)
+        except Exception as e:
             try:
-                await remove_existing_squad(ci.guild, squad_name, delete_roles=True)
-                done = discord.Embed(
-                    title="💀 Kingdom Disbanded",
-                    description=f"**{squad_name}** has fallen. Its roles have been destroyed.\n\n*The chronicles remember what once was...*",
-                    color=ROYAL_RED
-                )
-                await ci.followup.send(embed=done, ephemeral=True)
-                await log_action(ci.guild, "💀 Kingdom Disbanded",
-                    f"{ci.user.mention} disbanded **{squad_name}** (roles deleted, {member_count} members affected)")
-            except Exception as e:
-                await ci.followup.send(f"❌ Error: {e}", ephemeral=True)
+                await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
+            except:
+                pass
 
-        async def confirm_keep_roles(ci):
-            if ci.user.id != interaction.user.id:
-                return await ci.response.send_message("❌ Not yours.", ephemeral=True)
-            await ci.response.defer(ephemeral=True)
-            try:
-                await remove_existing_squad(ci.guild, squad_name, delete_roles=False)
-                done = discord.Embed(
-                    title="📋 Kingdom Removed (Roles Kept)",
-                    description=f"**{squad_name}** removed from the bot but Discord roles are preserved.\nYou can delete them manually if needed.",
-                    color=ROYAL_GOLD
-                )
-                await ci.followup.send(embed=done, ephemeral=True)
-                await log_action(ci.guild, "📋 Kingdom Removed",
-                    f"{ci.user.mention} removed **{squad_name}** from bot (roles kept)")
-            except Exception as e:
-                await ci.followup.send(f"❌ Error: {e}", ephemeral=True)
 
-        async def cancel(ci):
-            if ci.user.id != interaction.user.id:
-                return await ci.response.send_message("❌ Not yours.", ephemeral=True)
-            await ci.response.edit_message(content="✅ Cancelled.", embed=None, view=None)
+class RemoveConfirmView(View):
+    """Confirmation buttons for squad removal."""
+    def __init__(self, squad_name: str, member_count: int, author_id: int):
+        super().__init__(timeout=60)
+        self.squad_name = squad_name
+        self.member_count = member_count
+        self.author_id = author_id
 
-        b1 = Button(label="Delete + Roles", style=discord.ButtonStyle.danger, emoji="💀")
-        b1.callback = confirm_delete_roles
-        b2 = Button(label="Remove (Keep Roles)", style=discord.ButtonStyle.primary, emoji="📋")
-        b2.callback = confirm_keep_roles
-        b3 = Button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="✗")
-        b3.callback = cancel
-        view.add_item(b1); view.add_item(b2); view.add_item(b3)
+    @discord.ui.button(label="Delete + Roles", style=discord.ButtonStyle.danger, emoji="💀", row=0)
+    async def delete_roles_btn(self, interaction: discord.Interaction, button: Button):
+        if interaction.user.id != self.author_id:
+            return await interaction.response.send_message("❌ Not yours.", ephemeral=True)
+        try:
+            await remove_existing_squad(interaction.guild, self.squad_name, delete_roles=True)
+            embed = discord.Embed(
+                title="💀 Kingdom Disbanded",
+                description=f"**{self.squad_name}** has fallen. Its roles have been destroyed.\n\n*The chronicles remember what once was...*",
+                color=ROYAL_RED
+            )
+            await interaction.response.edit_message(embed=embed, view=None)
+            await log_action(interaction.guild, "💀 Kingdom Disbanded",
+                f"{interaction.user.mention} disbanded **{self.squad_name}** (roles deleted, {self.member_count} members affected)")
+        except Exception as e:
+            await interaction.response.edit_message(content=f"❌ Error: {e}", embed=None, view=None)
 
-        await interaction.response.edit_message(embed=embed, view=view)
+    @discord.ui.button(label="Remove (Keep Roles)", style=discord.ButtonStyle.primary, emoji="📋", row=0)
+    async def keep_roles_btn(self, interaction: discord.Interaction, button: Button):
+        if interaction.user.id != self.author_id:
+            return await interaction.response.send_message("❌ Not yours.", ephemeral=True)
+        try:
+            await remove_existing_squad(interaction.guild, self.squad_name, delete_roles=False)
+            embed = discord.Embed(
+                title="📋 Kingdom Removed (Roles Kept)",
+                description=f"**{self.squad_name}** removed from the bot but Discord roles are preserved.\nYou can delete them manually if needed.",
+                color=ROYAL_GOLD
+            )
+            await interaction.response.edit_message(embed=embed, view=None)
+            await log_action(interaction.guild, "📋 Kingdom Removed",
+                f"{interaction.user.mention} removed **{self.squad_name}** from bot (roles kept)")
+        except Exception as e:
+            await interaction.response.edit_message(content=f"❌ Error: {e}", embed=None, view=None)
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, row=0)
+    async def cancel_btn(self, interaction: discord.Interaction, button: Button):
+        if interaction.user.id != self.author_id:
+            return await interaction.response.send_message("❌ Not yours.", ephemeral=True)
+        await interaction.response.edit_message(content="✅ Cancelled.", embed=None, view=None)
 
 
 class ModeratorPanelView(View):
