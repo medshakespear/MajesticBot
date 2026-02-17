@@ -2707,6 +2707,7 @@ class HelpView(View):
                 "`/leader` — Leader panel (manage roster & kingdom)\n"
                 "`/mod` — Moderator panel (matches & titles)\n"
                 "`/profile @user` — View anyone's profile\n"
+                "`/restore` — Restore data from backup (mod only)\n"
                 "`/help` — This help menu"
             ), inline=False)
             embed.add_field(name="🧠 AI Features", value=(
@@ -2821,10 +2822,87 @@ async def help_command(interaction: discord.Interaction):
         "`/leader` — Leader panel (manage roster & kingdom)\n"
         "`/mod` — Moderator panel (matches & titles)\n"
         "`/profile @user` — View anyone's profile\n"
+        "`/restore` — Restore data from backup (mod only)\n"
         "`/help` — This menu"
     ), inline=False)
     embed.set_footer(text="⚜️ Majestic Bot")
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+
+@bot.tree.command(name="restore", description="💾 Restore data from a backup JSON file")
+@app_commands.describe(backup="The backup JSON file to restore")
+async def restore_command(interaction: discord.Interaction, backup: discord.Attachment):
+    global squad_data
+
+    # Only moderators can restore
+    if not is_moderator(interaction.user):
+        await interaction.response.send_message("❌ Only **Moderators** can restore data.", ephemeral=True)
+        return
+
+    # Validate file
+    if not backup.filename.endswith(".json"):
+        await interaction.response.send_message("❌ Please upload a `.json` file.", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    try:
+        # Download and parse
+        file_bytes = await backup.read()
+        new_data = json.loads(file_bytes.decode("utf-8"))
+
+        # Basic validation — must have these keys
+        if "squads" not in new_data or "matches" not in new_data:
+            await interaction.followup.send("❌ Invalid backup — missing `squads` or `matches` keys.", ephemeral=True)
+            return
+
+        # Ensure required fields exist
+        if "players" not in new_data:
+            new_data["players"] = {}
+        if "dynamic_squads" not in new_data:
+            new_data["dynamic_squads"] = {}
+
+        # Fill in any missing squad entries
+        for match in new_data.get("matches", []):
+            if "team1_participants" not in match:
+                match["team1_participants"] = []
+            if "team2_participants" not in match:
+                match["team2_participants"] = []
+
+        # Load dynamic squads into runtime
+        for sn, info in new_data.get("dynamic_squads", {}).items():
+            SQUADS[sn] = info["tag"]
+            if info.get("guest_role"):
+                GUEST_ROLES[sn] = info["guest_role"]
+
+        # Save to disk and update runtime
+        save_data(new_data)
+        squad_data = new_data
+
+        # Stats for confirmation
+        num_squads = len(new_data["squads"])
+        num_matches = len(new_data["matches"])
+        num_players = len(new_data["players"])
+
+        embed = discord.Embed(
+            title="✅ Data Restored Successfully!",
+            description=f"Backup `{backup.filename}` has been loaded.",
+            color=ROYAL_GREEN
+        )
+        embed.add_field(name="📊 Restored", value=(
+            f"🏰 **{num_squads}** kingdoms\n"
+            f"⚔️ **{num_matches}** matches\n"
+            f"👤 **{num_players}** player profiles"
+        ), inline=False)
+        embed.set_footer(text="⚜️ The chronicles have been restored!")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        await log_action(interaction.guild, "💾 Data Restored",
+            f"{interaction.user.mention} restored backup `{backup.filename}` ({num_squads} squads, {num_matches} matches, {num_players} players)")
+
+    except json.JSONDecodeError:
+        await interaction.followup.send("❌ Invalid JSON file — could not parse.", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f"❌ Restore failed: {e}", ephemeral=True)
 
 
 # -------------------- EVENTS --------------------
