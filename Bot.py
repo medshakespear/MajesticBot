@@ -1264,6 +1264,7 @@ class SquadProfileView(View):
 
         embed.set_footer(text="🧠 Majestic AI — Powered by data, driven by glory!")
         await interaction.response.send_message(embed=embed, ephemeral=True)
+        await log_action(interaction.guild, "🧠 AI Analysis", f"{interaction.user.mention} ran **AI Analysis** on **{self.squad_name}**")
 
 
 async def show_squad_match_history(interaction, squad_name):
@@ -1400,7 +1401,15 @@ class MemberSelectorView(View):
         self.guild = guild
         self.page = page
 
-        if action in ["remove_member", "remove_guest", "set_main", "remove_main", "set_sub", "remove_sub", "promote_leader"]:
+        if action == "remove_guest":
+            # Show members with the GUEST role, not the squad role
+            grn = GUEST_ROLES.get(squad_name)
+            if grn:
+                gr = discord.utils.get(guild.roles, name=grn) if guild else None
+                members = gr.members if gr else []
+            else:
+                members = []
+        elif action in ["remove_member", "set_main", "remove_main", "set_sub", "remove_sub", "promote_leader"]:
             members = squad_role.members if squad_role else []
         elif action == "clear_history":
             members = [m for m in guild.members if not m.bot and str(m.id) in squad_data["players"]]
@@ -1505,6 +1514,7 @@ class MemberSelectorView(View):
         mr.remove(member.id); save_data(squad_data)
         embed = discord.Embed(title="✅ Removed from Mains", description=f"{member.mention} removed from main roster", color=ROYAL_PURPLE)
         await interaction.response.edit_message(embed=embed, view=None)
+        await log_action(self.guild, "❌ Main Removed", f"{interaction.user.mention} removed {member.mention} from **{self.squad_name}** main roster")
 
     async def h_set_sub(self, interaction, member):
         si = squad_data["squads"][self.squad_name]
@@ -1515,6 +1525,7 @@ class MemberSelectorView(View):
         subs.append(member.id); save_data(squad_data)
         embed = discord.Embed(title="🔄 Sub Added!", description=f"{member.mention} → Substitutes ({len(subs)}/3)", color=ROYAL_BLUE)
         await interaction.response.edit_message(embed=embed, view=None)
+        await log_action(self.guild, "🔄 Sub Set", f"{interaction.user.mention} added {member.mention} to **{self.squad_name}** substitutes")
 
     async def h_rm_sub(self, interaction, member):
         si = squad_data["squads"][self.squad_name]
@@ -1523,6 +1534,7 @@ class MemberSelectorView(View):
         subs.remove(member.id); save_data(squad_data)
         embed = discord.Embed(title="✅ Removed from Subs", description=f"{member.mention} removed from substitutes", color=ROYAL_PURPLE)
         await interaction.response.edit_message(embed=embed, view=None)
+        await log_action(self.guild, "❌ Sub Removed", f"{interaction.user.mention} removed {member.mention} from **{self.squad_name}** substitutes")
 
     async def h_promote(self, interaction, member):
         lr = discord.utils.get(self.guild.roles, name=LEADER_ROLE_NAME)
@@ -1540,6 +1552,7 @@ class MemberSelectorView(View):
         await member.add_roles(gr)
         embed = discord.Embed(title="🎭 Guest Added!", description=f"{member.mention} → Guest of **{self.squad_name}**", color=ROYAL_BLUE)
         await interaction.response.edit_message(embed=embed, view=None)
+        await log_action(self.guild, "🎭 Guest Added", f"{interaction.user.mention} gave {member.mention} guest access to **{self.squad_name}**")
 
     async def h_rm_guest(self, interaction, member):
         grn = GUEST_ROLES.get(self.squad_name)
@@ -1549,6 +1562,7 @@ class MemberSelectorView(View):
         await member.remove_roles(gr)
         embed = discord.Embed(title="✅ Guest Removed", description=f"{member.mention}'s guest access revoked", color=ROYAL_PURPLE)
         await interaction.response.edit_message(embed=embed, view=None)
+        await log_action(self.guild, "❌ Guest Removed", f"{interaction.user.mention} revoked {member.mention}'s guest access to **{self.squad_name}**")
 
     async def h_clear(self, interaction, member):
         pk = str(member.id)
@@ -1807,8 +1821,8 @@ class MemberPanelView(View):
     @discord.ui.button(label="Browse Kingdoms", style=discord.ButtonStyle.primary, emoji="🏰", row=0)
     async def browse_btn(self, interaction: discord.Interaction, button: Button):
         view = SquadSelectorView(purpose="browse")
-        embed = discord.Embed(title="🏰 Kingdom Explorer", description="Select a kingdom to explore!", color=ROYAL_BLUE)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        await log_action(interaction.guild, "🏰 Browse", f"{interaction.user.mention} opened **Kingdom Explorer**")
 
     @discord.ui.button(label="Rankings", style=discord.ButtonStyle.secondary, emoji="🏆", row=0)
     async def rankings_btn(self, interaction: discord.Interaction, button: Button):
@@ -1822,10 +1836,12 @@ class MemberPanelView(View):
         embed.set_footer(text=f"All {len(rankings)} kingdoms")
         view = RankingsView(page=1) if tp > 1 else None
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        await log_action(interaction.guild, "🏆 Rankings", f"{interaction.user.mention} viewed **Leaderboard**")
 
     @discord.ui.button(label="View Profile", emoji="👤", style=discord.ButtonStyle.primary, row=0)
     async def view_profile(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(SearchMemberModal("view_profile"))
+        await log_action(interaction.guild, "👤 View Profile", f"{interaction.user.mention} searched a **warrior profile**")
 
     @discord.ui.button(label="My Kingdom", style=discord.ButtonStyle.success, emoji="🛡️", row=1)
     async def my_squad_btn(self, interaction: discord.Interaction, button: Button):
@@ -1834,10 +1850,12 @@ class MemberPanelView(View):
             await interaction.response.send_message("❌ You're not in any kingdom.", ephemeral=True)
             return
         await show_squad_info(interaction, role, role.name, tag, public=False)
+        await log_action(interaction.guild, "🛡️ My Kingdom", f"{interaction.user.mention} viewed their kingdom **{role.name}**")
 
     @discord.ui.button(label="My Profile", style=discord.ButtonStyle.success, emoji="⚜️", row=1)
     async def my_profile_btn(self, interaction: discord.Interaction, button: Button):
         await show_player_profile(interaction, interaction.user, public=False)
+        await log_action(interaction.guild, "⚜️ My Profile", f"{interaction.user.mention} viewed their **own profile**")
 
     @discord.ui.button(label="Setup Profile", style=discord.ButtonStyle.primary, emoji="⚙️", row=1)
     async def setup_btn(self, interaction: discord.Interaction, button: Button):
@@ -1846,10 +1864,12 @@ class MemberPanelView(View):
         view = RoleSelectView(interaction.user.id, sn)
         embed = discord.Embed(title="⚙️ Profile Setup", description="Choose your battle position first:", color=ROYAL_PURPLE)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        await log_action(interaction.guild, "⚙️ Setup", f"{interaction.user.mention} started **Profile Setup**")
 
     @discord.ui.button(label="Fun Stats", style=discord.ButtonStyle.secondary, emoji="🎲", row=2)
     async def fun_btn(self, interaction: discord.Interaction, button: Button):
         await show_fun_stats(interaction)
+        await log_action(interaction.guild, "🎲 Fun Stats", f"{interaction.user.mention} viewed **Fun Stats**")
 
     @discord.ui.button(label="War Oracle", style=discord.ButtonStyle.primary, emoji="🔮", row=2)
     async def oracle_btn(self, interaction: discord.Interaction, button: Button):
@@ -1859,6 +1879,7 @@ class MemberPanelView(View):
             color=ROYAL_PURPLE
         )
         await interaction.response.send_message(embed=embed, view=MatchPredictorStep1View(), ephemeral=True)
+        await log_action(interaction.guild, "🔮 War Oracle", f"{interaction.user.mention} consulted the **War Oracle**")
 
     @discord.ui.button(label="Realm News", style=discord.ButtonStyle.success, emoji="📰", row=2)
     async def news_btn(self, interaction: discord.Interaction, button: Button):
@@ -1873,6 +1894,7 @@ class MemberPanelView(View):
 
         embed.set_footer(text=f"📰 Published {datetime.utcnow().strftime('%b %d, %Y %H:%M')} UTC | Majestic Press")
         await interaction.response.send_message(embed=embed, ephemeral=True)
+        await log_action(interaction.guild, "📰 Realm News", f"{interaction.user.mention} read **Realm News**")
 
     @discord.ui.button(label="Leave Kingdom", style=discord.ButtonStyle.danger, emoji="🚪", row=3)
     async def leave_btn(self, interaction: discord.Interaction, button: Button):
@@ -1966,6 +1988,7 @@ class LeaderPanelView(View):
     @discord.ui.button(label="View Kingdom", emoji="🏰", style=discord.ButtonStyle.primary, row=0)
     async def view_btn(self, interaction: discord.Interaction, button: Button):
         await show_squad_info(interaction, self.squad_role, self.squad_name, self.tag, public=False)
+        await log_action(interaction.guild, "🏰 View Kingdom", f"{interaction.user.mention} viewed **{self.squad_name}** (leader)")
 
     @discord.ui.button(label="Set Main", emoji="⭐", style=discord.ButtonStyle.primary, row=1)
     async def main_btn(self, interaction: discord.Interaction, button: Button):
@@ -2527,11 +2550,13 @@ class ModeratorPanelView(View):
     async def add_match_button(self, interaction: discord.Interaction, button: Button):
         embed = discord.Embed(title="⚔️ Record Battle — Step 1/3", description="Select the **first** kingdom:", color=ROYAL_BLUE)
         await interaction.response.send_message(embed=embed, view=RecordBattleStep1View(), ephemeral=True)
+        await log_action(interaction.guild, "⚔️ Record Battle", f"{interaction.user.mention} started **Record Battle**")
 
     @discord.ui.button(label="Award Title", style=discord.ButtonStyle.success, emoji="🏆", row=0)
     async def add_title_button(self, interaction: discord.Interaction, button: Button):
         embed = discord.Embed(title="🏆 Award Title", description="Select the kingdom to award:", color=ROYAL_GOLD)
         await interaction.response.send_message(embed=embed, view=AwardTitleSquadView(), ephemeral=True)
+        await log_action(interaction.guild, "🏆 Award Title", f"{interaction.user.mention} started **Award Title**")
 
     @discord.ui.button(label="Delete Match", style=discord.ButtonStyle.danger, emoji="🗑️", row=0)
     async def del_btn(self, interaction: discord.Interaction, button: Button):
@@ -2540,10 +2565,12 @@ class ModeratorPanelView(View):
             return
         embed = discord.Embed(title="🗑️ Delete Match", description="Select a match to delete:", color=ROYAL_RED)
         await interaction.response.send_message(embed=embed, view=DeleteMatchSelectorView(), ephemeral=True)
+        await log_action(interaction.guild, "🗑️ Delete Match", f"{interaction.user.mention} started **Delete Match**")
 
     @discord.ui.button(label="Recent Matches", style=discord.ButtonStyle.secondary, emoji="📜", row=1)
     async def recent_btn(self, interaction: discord.Interaction, button: Button):
         await show_recent_matches(interaction, limit=10)
+        await log_action(interaction.guild, "📜 Recent Matches", f"{interaction.user.mention} viewed **Recent Matches**")
 
     @discord.ui.button(label="Clear History", style=discord.ButtonStyle.danger, emoji="🗑️", row=1)
     async def clear_btn(self, interaction: discord.Interaction, button: Button):
@@ -2575,10 +2602,12 @@ class ModeratorPanelView(View):
             color=ROYAL_PURPLE
         )
         await interaction.response.send_message(embed=embed, view=MatchPredictorStep1View(), ephemeral=True)
+        await log_action(interaction.guild, "🔮 War Oracle", f"{interaction.user.mention} consulted the **War Oracle** (mod)")
 
     @discord.ui.button(label="Add Kingdom", style=discord.ButtonStyle.success, emoji="🏰", row=3)
     async def add_squad_btn(self, interaction: discord.Interaction, button: Button):
         await interaction.response.send_modal(AddSquadModal())
+        await log_action(interaction.guild, "🏰 Add Kingdom", f"{interaction.user.mention} started **Add Kingdom**")
 
     @discord.ui.button(label="Remove Kingdom", style=discord.ButtonStyle.danger, emoji="💀", row=3)
     async def remove_squad_btn(self, interaction: discord.Interaction, button: Button):
@@ -2591,6 +2620,7 @@ class ModeratorPanelView(View):
             color=ROYAL_RED
         )
         await interaction.response.send_message(embed=embed, view=RemoveSquadSelectorView(), ephemeral=True)
+        await log_action(interaction.guild, "💀 Remove Kingdom", f"{interaction.user.mention} started **Remove Kingdom**")
 
 
 async def show_recent_matches(interaction, limit=10):
@@ -2758,6 +2788,7 @@ async def member_command(interaction: discord.Interaction):
     embed.set_thumbnail(url=interaction.user.display_avatar.url)
     embed.set_footer(text="⚜️ Powered by Majestic AI • Use the buttons below!")
     await interaction.response.send_message(embed=embed, view=view)
+    await log_action(interaction.guild, "📋 /member", f"{interaction.user.mention} opened **Member Panel**")
 
 
 @bot.tree.command(name="leader", description="👑 Open the Majestic Leader panel")
@@ -2785,6 +2816,7 @@ async def leader_command(interaction: discord.Interaction):
     embed.add_field(name="📊 Quick Status", value=f"👥 {len(sr.members)} members • ⭐ {mr_count}/5 mains • 🔄 {sub_count}/3 subs", inline=False)
     embed.set_footer(text="⚜️ Lead with honor! | All actions via buttons below")
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    await log_action(interaction.guild, "📋 /leader", f"{interaction.user.mention} opened **Leader Panel** for **{sr.name}**")
 
 
 @bot.tree.command(name="mod", description="🛡️ Open the Moderator panel")
@@ -2801,12 +2833,14 @@ async def mod_command(interaction: discord.Interaction):
     embed.add_field(name="📊 Stats", value=f"⚔️ {len(squad_data['matches'])} matches recorded • 🏰 {len(SQUADS)} kingdoms", inline=False)
     embed.set_footer(text="⚜️ Govern with fairness!")
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    await log_action(interaction.guild, "📋 /mod", f"{interaction.user.mention} opened **Moderator Panel**")
 
 
 @bot.tree.command(name="profile", description="⚜️ View a warrior's profile")
 @app_commands.describe(member="Tag the warrior to view")
 async def profile_command(interaction: discord.Interaction, member: discord.Member):
     await show_player_profile(interaction, member, public=True)
+    await log_action(interaction.guild, "👤 /profile", f"{interaction.user.mention} viewed profile of {member.mention}")
 
 
 @bot.tree.command(name="help", description="📜 Majestic Help — command guide")
@@ -2827,6 +2861,7 @@ async def help_command(interaction: discord.Interaction):
     ), inline=False)
     embed.set_footer(text="⚜️ Majestic Bot")
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    await log_action(interaction.guild, "📜 /help", f"{interaction.user.mention} opened **Help Menu**")
 
 
 @bot.tree.command(name="restore", description="💾 Restore data from a backup JSON file")
