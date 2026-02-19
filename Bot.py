@@ -1877,6 +1877,11 @@ class MemberPanelView(View):
 
     @discord.ui.button(label="Browse Kingdoms", style=discord.ButtonStyle.primary, emoji="🏰", row=0)
     async def browse_btn(self, interaction: discord.Interaction, button: Button):
+        embed = discord.Embed(
+        title="🏰 Kingdom Explorer",
+        description="Select a kingdom from the menu below to browse its profile.",
+        color=ROYAL_GOLD
+    )
         view = SquadSelectorView(purpose="browse")
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
         await log_action(interaction.guild, "🏰 Browse", f"{interaction.user.mention} opened **Kingdom Explorer**")
