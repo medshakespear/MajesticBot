@@ -1,3 +1,4 @@
+
 import discord
 from discord.ext import commands, tasks
 from discord.ui import Button, View, Select, Modal, TextInput
@@ -1876,11 +1877,6 @@ class MemberPanelView(View):
 
     @discord.ui.button(label="Browse Kingdoms", style=discord.ButtonStyle.primary, emoji="🏰", row=0)
     async def browse_btn(self, interaction: discord.Interaction, button: Button):
-        embed = discord.Embed(
-        title="🏰 Kingdom Explorer",
-        description="Select a kingdom from the menu below to browse its profile.",
-        color=ROYAL_GOLD
-    )
         view = SquadSelectorView(purpose="browse")
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
         await log_action(interaction.guild, "🏰 Browse", f"{interaction.user.mention} opened **Kingdom Explorer**")
@@ -2603,6 +2599,240 @@ class RemoveConfirmView(View):
         await interaction.response.edit_message(content="✅ Cancelled.", embed=None, view=None)
 
 
+class EditSquadSelectorView(View):
+    """Select a squad to edit its tag, role name, or guest role."""
+    def __init__(self, page=1):
+        super().__init__(timeout=180)
+        self.page = page
+        all_squads = sorted(SQUADS.items())
+        if not all_squads:
+            return
+        start = (page - 1) * 25
+        end = start + 25
+        page_squads = all_squads[start:end]
+        if not page_squads:
+            return
+
+        options = [discord.SelectOption(label=str(n)[:100], value=str(n)[:100], description=f"Tag: {t}"[:100]) for n, t in page_squads]
+        select = Select(placeholder="✏️ Select kingdom to edit...", options=options)
+        select.callback = self.squad_selected
+        self.add_item(select)
+
+        total_pages = (len(all_squads) + 24) // 25
+        if total_pages > 1:
+            if page > 1:
+                b = Button(label="← Prev", style=discord.ButtonStyle.secondary)
+                b.callback = self.prev
+                self.add_item(b)
+            if page < total_pages:
+                b = Button(label="Next →", style=discord.ButtonStyle.secondary)
+                b.callback = self.nxt
+                self.add_item(b)
+
+    async def prev(self, interaction):
+        embed = discord.Embed(title="✏️ Edit Kingdom", description="Select the kingdom to edit:", color=ROYAL_GOLD)
+        await interaction.response.edit_message(embed=embed, view=EditSquadSelectorView(self.page - 1))
+
+    async def nxt(self, interaction):
+        embed = discord.Embed(title="✏️ Edit Kingdom", description="Select the kingdom to edit:", color=ROYAL_GOLD)
+        await interaction.response.edit_message(embed=embed, view=EditSquadSelectorView(self.page + 1))
+
+    async def squad_selected(self, interaction):
+        try:
+            squad_name = interaction.data["values"][0]
+            current_tag = SQUADS.get(squad_name, "?")
+            current_guest = GUEST_ROLES.get(squad_name, "")
+            await interaction.response.send_modal(EditSquadModal(squad_name, current_tag, current_guest))
+        except Exception as e:
+            try:
+                await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
+            except:
+                pass
+
+
+class EditSquadModal(Modal, title="✏️ Edit Kingdom"):
+    def __init__(self, old_name, old_tag, old_guest):
+        super().__init__()
+        self.old_name = old_name
+        self.old_tag = old_tag
+        self.old_guest = old_guest
+
+        self.new_name_input = TextInput(
+            label="Kingdom Name",
+            default=old_name,
+            required=True,
+            max_length=50,
+            placeholder="Change to rename the kingdom + Discord role"
+        )
+        self.new_tag_input = TextInput(
+            label="Tag (nickname prefix)",
+            default=old_tag,
+            required=True,
+            max_length=10,
+            placeholder="e.g., PF, 🔥, etc."
+        )
+        self.new_guest_input = TextInput(
+            label="Guest Role Name (blank to remove)",
+            default=old_guest,
+            required=False,
+            max_length=50,
+            placeholder="Leave blank to remove guest role link"
+        )
+        self.add_item(self.new_name_input)
+        self.add_item(self.new_tag_input)
+        self.add_item(self.new_guest_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        global ALL_TAGS
+
+        new_name = self.new_name_input.value.strip()
+        new_tag = self.new_tag_input.value.strip()
+        new_guest = self.new_guest_input.value.strip() if self.new_guest_input.value else ""
+
+        # Validate: if name changed, check it doesn't clash
+        name_changed = new_name != self.old_name
+        tag_changed = new_tag != self.old_tag
+        guest_changed = new_guest != self.old_guest
+
+        if not name_changed and not tag_changed and not guest_changed:
+            await interaction.response.send_message("ℹ️ No changes detected.", ephemeral=True)
+            return
+
+        if name_changed and new_name in SQUADS:
+            await interaction.response.send_message(f"❌ Kingdom **{new_name}** already exists!", ephemeral=True)
+            return
+
+        if tag_changed:
+            other_tags = [t for n, t in SQUADS.items() if n != self.old_name]
+            if new_tag in other_tags:
+                await interaction.response.send_message(f"❌ Tag `{new_tag}` is already used!", ephemeral=True)
+                return
+
+        await interaction.response.defer(ephemeral=True)
+
+        changes = []
+        guild = interaction.guild
+
+        try:
+            # --- 1. Tag change ---
+            if tag_changed:
+                SQUADS[self.old_name] = new_tag
+                changes.append(f"🏴 Tag: `{self.old_tag}` → `{new_tag}`")
+
+                # Update nicknames for all members with this role
+                role = discord.utils.get(guild.roles, name=self.old_name)
+                if role:
+                    for member in role.members:
+                        try:
+                            await safe_nick_update(member, role, new_tag)
+                        except:
+                            pass
+
+            # --- 2. Kingdom name change (renames everything) ---
+            if name_changed:
+                old = self.old_name
+                tag_to_use = new_tag if tag_changed else self.old_tag
+
+                # Rename Discord squad role
+                role = discord.utils.get(guild.roles, name=old)
+                if role:
+                    try:
+                        await role.edit(name=new_name, reason=f"Majestic Bot: Renamed '{old}' → '{new_name}'")
+                    except:
+                        pass
+
+                # Update SQUADS dict
+                SQUADS[new_name] = tag_to_use
+                del SQUADS[old]
+
+                # Update GUEST_ROLES dict
+                if old in GUEST_ROLES:
+                    GUEST_ROLES[new_name] = GUEST_ROLES.pop(old)
+
+                # Update squad_data["squads"]
+                if old in squad_data["squads"]:
+                    squad_data["squads"][new_name] = squad_data["squads"].pop(old)
+
+                # Update match history references
+                for match in squad_data["matches"]:
+                    if match.get("team1") == old:
+                        match["team1"] = new_name
+                    if match.get("team2") == old:
+                        match["team2"] = new_name
+
+                # Update squad_data["squads"][new_name]["match_history"]
+                si = squad_data["squads"].get(new_name, {})
+                for mh in si.get("match_history", []):
+                    if mh.get("team1") == old:
+                        mh["team1"] = new_name
+                    if mh.get("team2") == old:
+                        mh["team2"] = new_name
+
+                # Update player squad references
+                for pk, pd in squad_data["players"].items():
+                    if pd.get("squad") == old:
+                        pd["squad"] = new_name
+                    # Update squad_history entries
+                    for hist in pd.get("squad_history", []):
+                        if hist.get("squad") == old:
+                            hist["squad"] = new_name
+
+                changes.append(f"👑 Name: **{old}** → **{new_name}**")
+
+            # --- 3. Guest role change ---
+            actual_name = new_name if name_changed else self.old_name
+            if guest_changed:
+                old_grn = self.old_guest
+                if new_guest:
+                    # Rename existing guest role or create one
+                    if old_grn:
+                        old_gr = discord.utils.get(guild.roles, name=old_grn)
+                        if old_gr and new_guest != old_grn:
+                            try:
+                                await old_gr.edit(name=new_guest, reason=f"Majestic Bot: Guest role renamed for '{actual_name}'")
+                            except:
+                                pass
+                    else:
+                        # No old guest role — create one
+                        try:
+                            await guild.create_role(
+                                name=new_guest,
+                                mentionable=False,
+                                reason=f"Majestic Bot: Guest role for '{actual_name}'"
+                            )
+                        except:
+                            pass
+                    GUEST_ROLES[actual_name] = new_guest
+                    changes.append(f"🎭 Guest Role: `{old_grn or 'None'}` → `{new_guest}`")
+                else:
+                    # Removing guest role link (don't delete the Discord role, just unlink)
+                    GUEST_ROLES.pop(actual_name, None)
+                    changes.append(f"🎭 Guest Role: `{old_grn}` → *removed*")
+
+            # --- 4. Persist ---
+            ALL_TAGS = list(SQUADS.values())
+            squad_data["squad_registry"] = dict(SQUADS)
+            squad_data["guest_registry"] = dict(GUEST_ROLES)
+            save_data(squad_data)
+
+            # --- 5. Response ---
+            embed = discord.Embed(
+                title=f"✅ Kingdom Updated!",
+                description=f"**{SQUADS.get(actual_name, '?')} {actual_name}** has been modified.",
+                color=ROYAL_GREEN
+            )
+            embed.add_field(name="📝 Changes Applied", value="\n".join(changes), inline=False)
+            embed.set_footer(text="⚜️ The realm chronicles have been updated!")
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            await log_action(guild, "✏️ Kingdom Edited",
+                f"{interaction.user.mention} edited **{actual_name}**: " + ", ".join(changes))
+
+        except discord.Forbidden:
+            await interaction.followup.send("❌ Bot lacks permission to edit roles. Check bot role hierarchy!", ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f"❌ Error: {e}", ephemeral=True)
+
+
 class ModeratorPanelView(View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -2669,6 +2899,19 @@ class ModeratorPanelView(View):
     async def add_squad_btn(self, interaction: discord.Interaction, button: Button):
         await interaction.response.send_modal(AddSquadModal())
         await log_action(interaction.guild, "🏰 Add Kingdom", f"{interaction.user.mention} started **Add Kingdom**")
+
+    @discord.ui.button(label="Edit Kingdom", style=discord.ButtonStyle.primary, emoji="✏️", row=3)
+    async def edit_squad_btn(self, interaction: discord.Interaction, button: Button):
+        if not SQUADS:
+            await interaction.response.send_message("❌ No kingdoms to edit.", ephemeral=True)
+            return
+        embed = discord.Embed(
+            title="✏️ Edit Kingdom",
+            description="Select the kingdom to edit its name, tag, or guest role:",
+            color=ROYAL_GOLD
+        )
+        await interaction.response.send_message(embed=embed, view=EditSquadSelectorView(), ephemeral=True)
+        await log_action(interaction.guild, "✏️ Edit Kingdom", f"{interaction.user.mention} started **Edit Kingdom**")
 
     @discord.ui.button(label="Remove Kingdom", style=discord.ButtonStyle.danger, emoji="💀", row=3)
     async def remove_squad_btn(self, interaction: discord.Interaction, button: Button):
@@ -2790,6 +3033,7 @@ class HelpView(View):
             embed.add_field(name="💾 Download Backup", value="Download the full data file as JSON", inline=False)
             embed.add_field(name="🔮 War Oracle", value="AI match prediction before recording battles", inline=False)
             embed.add_field(name="🏰 Add Kingdom", value="Create a new kingdom with squad role, tag, and guest role", inline=False)
+            embed.add_field(name="✏️ Edit Kingdom", value="Edit a kingdom's name, tag, or guest role — renames Discord roles too", inline=False)
             embed.add_field(name="💀 Remove Kingdom", value="Disband a kingdom — optionally delete Discord roles too", inline=False)
         else:  # help
             embed = discord.Embed(title="📜 Majestic Help", description="Quick guide to all commands", color=ROYAL_PURPLE)
