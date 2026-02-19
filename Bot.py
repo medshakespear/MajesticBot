@@ -1768,6 +1768,193 @@ async def announce_challenge(guild, embed, content=None):
             pass
 
 
+async def announce_event(guild, embed, content=None):
+    """Post any live event to #war-results."""
+    channel = discord.utils.get(guild.text_channels, name=ANNOUNCE_CHANNEL_NAME)
+    if channel:
+        try:
+            await channel.send(content=content, embed=embed)
+        except:
+            pass
+
+
+async def announce_streak(guild, squad_name, streak_type, streak_count):
+    """Announce streak milestones (3, 5, 7, 10+)."""
+    if streak_count not in (3, 5, 7, 10) and streak_count < 10:
+        return
+    tag = SQUADS.get(squad_name, "?")
+    if streak_type == "win":
+        if streak_count >= 10:
+            title, desc, color = "🔥🔥🔥 LEGENDARY STREAK!", f"**{tag} {squad_name}** is on a **{streak_count}-WIN STREAK!**\nIs anyone brave enough to stop them?!", ROYAL_GOLD
+        elif streak_count >= 7:
+            title, desc, color = "🔥🔥 DOMINATION!", f"**{tag} {squad_name}** is on a **{streak_count}-WIN STREAK!**\nThey look unstoppable!", ROYAL_GOLD
+        elif streak_count >= 5:
+            title, desc, color = "🔥 ON FIRE!", f"**{tag} {squad_name}** is blazing with a **{streak_count}-WIN STREAK!**", ROYAL_RED
+        else:
+            title, desc, color = "🔥 Hot Streak!", f"**{tag} {squad_name}** has won **{streak_count} in a row!**", ROYAL_RED
+    elif streak_type == "loss":
+        if streak_count >= 7:
+            title, desc, color = "💀 CRISIS MODE!", f"**{tag} {squad_name}** has lost **{streak_count} straight!**\nDark times in the kingdom...", 0x2c2c2c
+        elif streak_count >= 5:
+            title, desc, color = "❄️ Cold Streak!", f"**{tag} {squad_name}** has lost **{streak_count} in a row...**\nCan they turn it around?", 0x4a4a4a
+        else:
+            title, desc, color = "❄️ Struggling", f"**{tag} {squad_name}** has dropped **{streak_count} straight.**", 0x666666
+    else:
+        return
+    embed = discord.Embed(title=title, description=desc, color=color)
+    embed.set_footer(text="⚜️ Streak Alert")
+    await announce_event(guild, embed)
+
+
+async def announce_rank_change(guild, squad_name, old_rank, new_rank):
+    """Announce rank changes after matches."""
+    if old_rank is None or new_rank is None or old_rank == new_rank:
+        return
+    tag = SQUADS.get(squad_name, "?")
+    if new_rank < old_rank:
+        # Moved UP
+        if new_rank <= 3:
+            embed = discord.Embed(
+                title="📈 TOP 3 ALERT!",
+                description=f"**{tag} {squad_name}** climbed to **#{new_rank}** (was #{old_rank})!",
+                color=ROYAL_GOLD
+            )
+        elif new_rank == 1:
+            embed = discord.Embed(
+                title="👑 NEW #1!",
+                description=f"**{tag} {squad_name}** has taken the **THRONE!** (was #{old_rank})",
+                color=ROYAL_GOLD
+            )
+        else:
+            embed = discord.Embed(
+                title="📈 Rank Up!",
+                description=f"**{tag} {squad_name}** climbed from **#{old_rank}** → **#{new_rank}**",
+                color=ROYAL_GREEN
+            )
+    else:
+        # Moved DOWN
+        if old_rank <= 3 and new_rank > 3:
+            embed = discord.Embed(
+                title="📉 Dethroned!",
+                description=f"**{tag} {squad_name}** dropped out of the Top 3! **#{old_rank}** → **#{new_rank}**",
+                color=ROYAL_RED
+            )
+        else:
+            # Only announce significant drops (3+)
+            if new_rank - old_rank < 3:
+                return
+            embed = discord.Embed(
+                title="📉 Falling!",
+                description=f"**{tag} {squad_name}** dropped from **#{old_rank}** → **#{new_rank}**",
+                color=0x666666
+            )
+    embed.set_footer(text="⚜️ Rank Update")
+    await announce_event(guild, embed)
+
+
+DAILY_QUOTES = [
+    "⚔️ *The battlefield awaits. Who will answer the call today?*",
+    "👑 *Legends aren't born — they're forged in the fires of competition.*",
+    "🏰 *Every kingdom's story is written one battle at a time.*",
+    "🔥 *Today's underdog could be tomorrow's champion.*",
+    "⚡ *Glory doesn't wait. Challenge a kingdom and make your mark.*",
+    "🗡️ *The realm is restless. Steel your resolve, warriors.*",
+    "🌅 *A new day dawns on the battlefield. Fight with honor.*",
+    "💀 *Defeat is just a detour on the road to glory.*",
+    "🏆 *The throne is never truly secure. Will you defend it?*",
+    "🎯 *Check the bounty board — someone's glory is waiting to be claimed.*",
+    "📊 *The rankings shift with every battle. Where does your kingdom stand?*",
+    "🤝 *True rivals make each other stronger. Challenge one today.*",
+    "⚖️ *Balance is an illusion. Only the bold seize glory.*",
+    "🦅 *Eagles don't flock. Lead your kingdom to victory.*",
+]
+
+
+@tasks.loop(hours=1)
+async def daily_pulse_task():
+    """Daily realm pulse — posts once per day at 12:00 UTC."""
+    now = datetime.utcnow()
+    if now.hour != 12:
+        return
+
+    for guild in bot.guilds:
+        channel = discord.utils.get(guild.text_channels, name=ANNOUNCE_CHANNEL_NAME)
+        if not channel:
+            continue
+
+        rankings = get_squad_ranking()
+        quote = random.choice(DAILY_QUOTES)
+
+        embed = discord.Embed(
+            title="⚜️ DAILY REALM PULSE",
+            description=quote,
+            color=ROYAL_PURPLE
+        )
+
+        # Today's stats
+        today_str = now.strftime("%Y-%m-%d")
+        today_matches = [m for m in squad_data["matches"] if m.get("date", "").startswith(today_str)]
+        yesterday = (now.timestamp() - 86400)
+        yesterday_str = datetime.utcfromtimestamp(yesterday).strftime("%Y-%m-%d")
+        yesterday_matches = [m for m in squad_data["matches"] if m.get("date", "").startswith(yesterday_str)]
+
+        embed.add_field(
+            name="📊 Activity",
+            value=f"⚔️ Yesterday: **{len(yesterday_matches)}** battles\n🏰 Total: **{len(squad_data['matches'])}** all-time",
+            inline=True
+        )
+
+        # Current #1
+        if rankings:
+            top = rankings[0]
+            embed.add_field(
+                name="👑 Reigning Champion",
+                value=f"**{top['tag']} {top['name']}**\n💎 {top['points']} glory | {top['win_rate']:.0f}% WR",
+                inline=True
+            )
+
+        # Hot streaks
+        hot = []
+        for sn in SQUADS:
+            si = squad_data["squads"].get(sn, {})
+            cs = si.get("current_streak", {})
+            if cs.get("count", 0) >= 3 and cs.get("type") == "win":
+                hot.append(f"🔥 **{SQUADS.get(sn, '?')} {sn}** ({cs['count']}W)")
+        if hot:
+            embed.add_field(name="🔥 Hot Kingdoms", value="\n".join(hot[:5]), inline=False)
+
+        # Active bounties teaser
+        bounties = squad_data.get("bounties", {})
+        if bounties:
+            top_bounty = max(bounties.items(), key=lambda x: x[1]["points"])
+            embed.add_field(
+                name="💰 Biggest Bounty",
+                value=f"**{SQUADS.get(top_bounty[0], '?')} {top_bounty[0]}** — +{top_bounty[1]['points']} Glory Points!",
+                inline=True
+            )
+
+        # Active challenges
+        active_ch = [c for c in squad_data.get("challenges", []) if c["status"] in ("pending", "accepted")]
+        if active_ch:
+            ch_text = ""
+            for c in active_ch[:3]:
+                emoji = "⏳" if c["status"] == "pending" else "⚔️"
+                ch_text += f"{emoji} {c['challenger']} vs {c['challenged']}\n"
+            embed.add_field(name="🎯 Open Challenges", value=ch_text, inline=True)
+
+        embed.set_footer(text=f"📅 {now.strftime('%A, %B %d, %Y')} | ⚜️ Majestic Realm Pulse")
+
+        try:
+            await channel.send(embed=embed)
+        except:
+            pass
+
+
+@daily_pulse_task.before_loop
+async def before_daily_pulse():
+    await bot.wait_until_ready()
+
+
 # =====================================================================
 #                     CHALLENGE SYSTEM
 # =====================================================================
@@ -2025,18 +2212,93 @@ def build_bounty_embed():
 
 
 class BountyBoardView(View):
-    """View for bounty board — members can view, mods can set manual bounties."""
-    def __init__(self, is_mod=False):
+    """View for bounty board — members can view."""
+    def __init__(self):
         super().__init__(timeout=180)
-        self.is_mod = is_mod
-        if is_mod:
-            pass  # Add manual bounty button for mods
 
     @discord.ui.button(label="Refresh", style=discord.ButtonStyle.secondary, emoji="🔄")
     async def refresh_btn(self, interaction: discord.Interaction, button: Button):
         refresh_bounties()
         save_data(squad_data)
         await interaction.response.edit_message(embed=build_bounty_embed(), view=BountyBoardView())
+
+
+class ManageBountiesView(View):
+    """Mod bounty manager — add, delete, refresh."""
+    def __init__(self):
+        super().__init__(timeout=180)
+
+    @discord.ui.button(label="Add Bounty", style=discord.ButtonStyle.success, emoji="➕", row=0)
+    async def add_btn(self, interaction: discord.Interaction, button: Button):
+        embed = discord.Embed(title="💰 Set Bounty", description="Select a kingdom:", color=ROYAL_GOLD)
+        await interaction.response.edit_message(embed=embed, view=SetBountySquadView())
+
+    @discord.ui.button(label="Remove Bounty", style=discord.ButtonStyle.danger, emoji="🗑️", row=0)
+    async def remove_btn(self, interaction: discord.Interaction, button: Button):
+        bounties = squad_data.get("bounties", {})
+        if not bounties:
+            await interaction.response.send_message("❌ No active bounties to remove.", ephemeral=True)
+            return
+        await interaction.response.edit_message(
+            embed=discord.Embed(title="🗑️ Remove Bounty", description="Select a bounty to remove:", color=ROYAL_RED),
+            view=DeleteBountyView()
+        )
+
+    @discord.ui.button(label="Clear All", style=discord.ButtonStyle.danger, emoji="💣", row=0)
+    async def clear_all_btn(self, interaction: discord.Interaction, button: Button):
+        bounties = squad_data.get("bounties", {})
+        if not bounties:
+            await interaction.response.send_message("❌ No bounties to clear.", ephemeral=True)
+            return
+        count = len(bounties)
+        squad_data["bounties"] = {}
+        save_data(squad_data)
+        await interaction.response.edit_message(
+            embed=discord.Embed(title="💣 All Bounties Cleared", description=f"Removed **{count}** bounties.", color=ROYAL_RED),
+            view=None
+        )
+        await log_action(interaction.guild, "💣 Bounties Cleared", f"{interaction.user.mention} cleared all **{count}** bounties")
+
+    @discord.ui.button(label="Refresh Board", style=discord.ButtonStyle.secondary, emoji="🔄", row=1)
+    async def refresh_btn(self, interaction: discord.Interaction, button: Button):
+        refresh_bounties()
+        save_data(squad_data)
+        embed = build_bounty_embed()
+        embed.title = "💰 Bounty Manager"
+        await interaction.response.edit_message(embed=embed, view=ManageBountiesView())
+
+
+class DeleteBountyView(View):
+    """Select a bounty to remove."""
+    def __init__(self):
+        super().__init__(timeout=180)
+        bounties = squad_data.get("bounties", {})
+        if not bounties:
+            return
+        options = []
+        for name, info in sorted(bounties.items(), key=lambda x: x[1]["points"], reverse=True):
+            label = f"{name} (+{info['points']} pts)"[:100]
+            options.append(discord.SelectOption(label=label, value=name, description=info.get("reason", "")[:100]))
+        if options:
+            select = Select(placeholder="Select bounty to remove...", options=options[:25])
+            select.callback = self.selected
+            self.add_item(select)
+
+    async def selected(self, interaction):
+        target = interaction.data["values"][0]
+        removed = squad_data.get("bounties", {}).pop(target, None)
+        save_data(squad_data)
+        if removed:
+            embed = discord.Embed(
+                title="🗑️ Bounty Removed",
+                description=f"Removed **+{removed['points']}** bounty from **{SQUADS.get(target, '?')} {target}**",
+                color=ROYAL_RED
+            )
+            await interaction.response.edit_message(embed=embed, view=None)
+            await log_action(interaction.guild, "🗑️ Bounty Removed",
+                f"{interaction.user.mention} removed bounty from **{target}** (+{removed['points']} pts)")
+        else:
+            await interaction.response.edit_message(content="❌ Bounty not found.", embed=None, view=None)
 
 
 class SetBountySquadView(View):
@@ -2832,6 +3094,10 @@ class RecordBattleScoreModal(Modal, title="⚔️ Enter Battle Score"):
             await interaction.response.send_message("❌ Invalid format. Use X-Y (e.g., 2-0)", ephemeral=True)
             return
 
+        # Capture pre-match ranks for rank change announcements
+        t1_old_rank = get_squad_rank(self.team1_name)
+        t2_old_rank = get_squad_rank(self.team2_name)
+
         # Pre-match prediction (before stats change)
         pred = predict_match(self.team1_name, self.team2_name)
 
@@ -2963,6 +3229,33 @@ class RecordBattleScoreModal(Modal, title="⚔️ Enter Battle Score"):
         pub_embed.set_footer(text=f"Match #{match_id} | {datetime.utcnow().strftime('%b %d, %Y %H:%M')} UTC")
         await announce_match(interaction.guild, pub_embed)
 
+        # --- Live Streak Alerts ---
+        await announce_streak(interaction.guild, self.team1_name, team1_streak["type"], team1_streak["count"])
+        await announce_streak(interaction.guild, self.team2_name, team2_streak["type"], team2_streak["count"])
+
+        # --- Rank Change Alerts ---
+        t1_new_rank = get_squad_rank(self.team1_name)
+        t2_new_rank = get_squad_rank(self.team2_name)
+        await announce_rank_change(interaction.guild, self.team1_name, t1_old_rank, t1_new_rank)
+        await announce_rank_change(interaction.guild, self.team2_name, t2_old_rank, t2_new_rank)
+
+        # --- Achievement Alerts ---
+        all_new_achievements = []
+        if team1_achievements:
+            for a in team1_achievements:
+                all_new_achievements.append(f"{a['name']} — **{SQUADS.get(self.team1_name, '?')} {self.team1_name}**")
+        if team2_achievements:
+            for a in team2_achievements:
+                all_new_achievements.append(f"{a['name']} — **{SQUADS.get(self.team2_name, '?')} {self.team2_name}**")
+        if all_new_achievements:
+            ach_embed = discord.Embed(
+                title="🏅 ACHIEVEMENT UNLOCKED!",
+                description="\n".join(all_new_achievements),
+                color=ROYAL_GOLD
+            )
+            ach_embed.set_footer(text="⚜️ New milestones reached!")
+            await announce_event(interaction.guild, ach_embed)
+
 
 # --- Award Title: Step 1 pick squad, Step 2 enter title + position ---
 class AwardTitleSquadView(View):
@@ -3017,6 +3310,18 @@ class AwardTitleDetailsModal(Modal, title="🏆 Award Championship Title"):
             embed.add_field(name="👑 Championship Glory", value=f"Total Championships: **{squad_info['championship_wins']}**", inline=False)
         await interaction.response.send_message(embed=embed)
         await log_action(interaction.guild, "🏆 Title Awarded", f"{interaction.user.mention} awarded **{self.squad_name}** the title: {full_title}")
+
+        # Public announcement
+        pub = discord.Embed(
+            title="🏆 ROYAL TITLE BESTOWED!",
+            description=f"{pe} **{SQUADS.get(self.squad_name, '?')} {self.squad_name}** has earned:\n\n**{full_title}**",
+            color=ROYAL_GOLD
+        )
+        if self.position.value.lower() in ["1st", "first", "1"]:
+            pub.add_field(name="👑 Championship!", value=f"Total Championships: **{squad_info['championship_wins']}**", inline=False)
+            pub.description += "\n\n🎉 *All hail the champions!*"
+        pub.set_footer(text="⚜️ Glory to the victors!")
+        await announce_event(interaction.guild, pub)
 
 
 # --- Delete Match: Select from recent matches ---
@@ -3143,6 +3448,15 @@ class AddSquadModal(Modal, title="🏰 Create New Kingdom"):
             await log_action(interaction.guild, "🏰 Kingdom Founded",
                 f"{interaction.user.mention} created **{tag} {name}**" + (f" with guest role `{grn}`" if grn else ""))
 
+            # Public announcement
+            pub = discord.Embed(
+                title="🏰 A NEW KINGDOM RISES!",
+                description=f"**{tag} {name}** has been founded!\n\n*A new power enters the realm. Will they conquer or crumble?*",
+                color=ROYAL_GREEN
+            )
+            pub.set_footer(text=f"Founded by {interaction.user.display_name} | ⚜️ The realm grows!")
+            await announce_event(interaction.guild, pub)
+
         except discord.Forbidden:
             await interaction.followup.send("❌ Bot lacks permission to create roles. Check bot role hierarchy!", ephemeral=True)
         except Exception as e:
@@ -3242,6 +3556,13 @@ class RemoveConfirmView(View):
             await interaction.response.edit_message(embed=embed, view=None)
             await log_action(interaction.guild, "💀 Kingdom Disbanded",
                 f"{interaction.user.mention} disbanded **{self.squad_name}** (roles deleted, {self.member_count} members affected)")
+            pub = discord.Embed(
+                title="💀 A KINGDOM HAS FALLEN!",
+                description=f"**{self.squad_name}** has been disbanded.\n*{self.member_count} warriors left without a banner...*",
+                color=ROYAL_RED
+            )
+            pub.set_footer(text="⚜️ The realm remembers.")
+            await announce_event(interaction.guild, pub)
         except Exception as e:
             await interaction.response.edit_message(content=f"❌ Error: {e}", embed=None, view=None)
 
@@ -3259,6 +3580,13 @@ class RemoveConfirmView(View):
             await interaction.response.edit_message(embed=embed, view=None)
             await log_action(interaction.guild, "📋 Kingdom Removed",
                 f"{interaction.user.mention} removed **{self.squad_name}** from bot (roles kept)")
+            pub = discord.Embed(
+                title="💀 A KINGDOM HAS FALLEN!",
+                description=f"**{self.squad_name}** has been disbanded.\n*Their legacy fades from the chronicles...*",
+                color=ROYAL_RED
+            )
+            pub.set_footer(text="⚜️ The realm remembers.")
+            await announce_event(interaction.guild, pub)
         except Exception as e:
             await interaction.response.edit_message(content=f"❌ Error: {e}", embed=None, view=None)
 
@@ -3497,6 +3825,16 @@ class EditSquadModal(Modal, title="✏️ Edit Kingdom"):
             await log_action(guild, "✏️ Kingdom Edited",
                 f"{interaction.user.mention} edited **{actual_name}**: " + ", ".join(changes))
 
+            # Announce name changes publicly
+            if name_changed:
+                pub = discord.Embed(
+                    title="✏️ KINGDOM REBORN!",
+                    description=f"**{self.old_name}** is now known as **{SQUADS.get(actual_name, '?')} {actual_name}**!\n\n*A new era begins under a new banner.*",
+                    color=ROYAL_PURPLE
+                )
+                pub.set_footer(text="⚜️ The chronicles have been rewritten.")
+                await announce_event(guild, pub)
+
         except discord.Forbidden:
             await interaction.followup.send("❌ Bot lacks permission to edit roles. Check bot role hierarchy!", ephemeral=True)
         except Exception as e:
@@ -3596,11 +3934,14 @@ class ModeratorPanelView(View):
         await interaction.response.send_message(embed=embed, view=RemoveSquadSelectorView(), ephemeral=True)
         await log_action(interaction.guild, "💀 Remove Kingdom", f"{interaction.user.mention} started **Remove Kingdom**")
 
-    @discord.ui.button(label="Set Bounty", style=discord.ButtonStyle.primary, emoji="💰", row=4)
+    @discord.ui.button(label="Bounties", style=discord.ButtonStyle.primary, emoji="💰", row=4)
     async def bounty_btn(self, interaction: discord.Interaction, button: Button):
-        embed = discord.Embed(title="💰 Set Manual Bounty", description="Select a kingdom to place a bounty on:", color=ROYAL_GOLD)
-        await interaction.response.send_message(embed=embed, view=SetBountySquadView(), ephemeral=True)
-        await log_action(interaction.guild, "💰 Set Bounty", f"{interaction.user.mention} started **Set Bounty**")
+        refresh_bounties()
+        save_data(squad_data)
+        embed = build_bounty_embed()
+        embed.title = "💰 Bounty Manager"
+        await interaction.response.send_message(embed=embed, view=ManageBountiesView(), ephemeral=True)
+        await log_action(interaction.guild, "💰 Bounties", f"{interaction.user.mention} opened **Bounty Manager**")
 
     @discord.ui.button(label="Challenges", style=discord.ButtonStyle.secondary, emoji="🎯", row=4)
     async def challenges_btn(self, interaction: discord.Interaction, button: Button):
@@ -3738,7 +4079,7 @@ class HelpView(View):
             embed.add_field(name="🏰 Add Kingdom", value="Create a new kingdom with squad role, tag, and guest role", inline=False)
             embed.add_field(name="✏️ Edit Kingdom", value="Edit a kingdom's name, tag, or guest role — renames Discord roles too", inline=False)
             embed.add_field(name="💀 Remove Kingdom", value="Disband a kingdom — optionally delete Discord roles too", inline=False)
-            embed.add_field(name="💰 Set Bounty", value="Place a manual Glory Points bounty on any kingdom", inline=False)
+            embed.add_field(name="💰 Bounties", value="Add, remove, or clear all bounties — full bounty manager", inline=False)
             embed.add_field(name="🎯 Challenges", value="View and manage all active war challenges", inline=False)
         else:  # help
             embed = discord.Embed(title="📜 Majestic Help", description="Quick guide to all commands", color=ROYAL_PURPLE)
@@ -3770,8 +4111,19 @@ class HelpView(View):
                 "• Leaders can **challenge** other kingdoms from `/leader`\n"
                 "• Challenges are announced in **#war-results**\n"
                 "• Top 3 kingdoms always have **auto-bounties**\n"
-                "• Mods can place **manual bounties** from `/mod`\n"
-                "• **Weekly Digest** posted every Sunday in #war-results"
+                "• Mods can **manage bounties** (add/remove/clear) from `/mod`\n"
+            ), inline=False)
+            embed.add_field(name="📢 #war-results (Live Feed)", value=(
+                "• ⚔️ Match results with Glory Points\n"
+                "• 🔥 Streak alerts (3, 5, 7, 10+)\n"
+                "• 📈📉 Rank changes & Top 3 movements\n"
+                "• 🏅 Achievement unlocks\n"
+                "• ⚔️ Challenge issued/accepted/declined\n"
+                "• 🏰 Kingdom founded/disbanded/renamed\n"
+                "• 🏆 Title awards & championships\n"
+                "• 💰 Bounty alerts\n"
+                "• ⚜️ **Daily Realm Pulse** at 12:00 UTC\n"
+                "• 📰 **Weekly Digest** every Sunday"
             ), inline=False)
             embed.add_field(name="💡 Tips", value=(
                 "• **View Profile / Add Member / Give Guest** use smart search — just type part of a name!\n"
@@ -4026,6 +4378,8 @@ async def on_ready():
     safety_sync.start()
     if not weekly_digest_task.is_running():
         weekly_digest_task.start()
+    if not daily_pulse_task.is_running():
+        daily_pulse_task.start()
     print(f"✅ Logged in as {bot.user}")
     print(f"⚜️ Majestic Bot is ready!")
     for guild in bot.guilds:
