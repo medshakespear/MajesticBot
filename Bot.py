@@ -32,7 +32,8 @@ ROYAL_BLUE = 0x4169e1
 ROYAL_RED = 0xdc143c
 ROYAL_GREEN = 0x2ecc71
 
-SQUADS = {
+# DEFAULT seeds — only used on FIRST RUN when no data file exists
+DEFAULT_SQUADS = {
     "Manschaft": "V",
     "Zero Vision": "ZVS",
     "SAT": "SAT",
@@ -65,7 +66,7 @@ SQUADS = {
     "Death Dose": "DD•",
 }
 
-GUEST_ROLES = {
+DEFAULT_GUEST_ROLES = {
     "浪 Ronin'": "浪 Ronin'_guest",
     "Ethereal": "Ethereal_guest",
     "ENNEAD": "Ennead_guest",
@@ -95,6 +96,10 @@ GUEST_ROLES = {
     "Manschaft": "Manschaft_guest",
     "Death Dose": "death.dose_guest",
 }
+
+# LIVE dicts — populated from data file on startup, NOT hardcoded
+SQUADS = {}
+GUEST_ROLES = {}
 
 ROLES = ["Gold Lane", "Mid Lane", "Exp Lane", "Jungler", "Roamer"]
 ROLE_EMOJIS = {
@@ -168,6 +173,16 @@ ACHIEVEMENTS = {
 
 
 # -------------------- DATA MANAGEMENT --------------------
+def _new_squad_entry():
+    return {
+        "wins": 0, "draws": 0, "losses": 0, "points": 0,
+        "titles": [], "championship_wins": 0, "logo_url": None,
+        "main_roster": [], "subs": [], "match_history": [],
+        "current_streak": {"type": "none", "count": 0},
+        "achievements": [], "biggest_win_streak": 0, "biggest_loss_streak": 0
+    }
+
+
 def load_data():
     global ALL_TAGS
     if os.path.exists(DATA_FILE):
@@ -178,23 +193,60 @@ def load_data():
                     match["team1_participants"] = []
                 if "team2_participants" not in match:
                     match["team2_participants"] = []
-            # Load dynamic squads added via /mod
-            for sn, info in data.get("dynamic_squads", {}).items():
-                SQUADS[sn] = info["tag"]
-                if info.get("guest_role"):
-                    GUEST_ROLES[sn] = info["guest_role"]
+
+            # --- Rebuild SQUADS from data file (single source of truth) ---
+            if "squad_registry" in data:
+                SQUADS.clear()
+                SQUADS.update(data["squad_registry"])
+            else:
+                # Migration: old data without registry
+                SQUADS.clear()
+                SQUADS.update(DEFAULT_SQUADS)
+                for sn, info in data.get("dynamic_squads", {}).items():
+                    SQUADS[sn] = info.get("tag", "?")
+                for sn, si in data.get("squads", {}).items():
+                    if si.get("disbanded") and sn in SQUADS:
+                        del SQUADS[sn]
+                data["squad_registry"] = dict(SQUADS)
+
+            # --- Rebuild GUEST_ROLES from data file ---
+            if "guest_registry" in data:
+                GUEST_ROLES.clear()
+                GUEST_ROLES.update(data["guest_registry"])
+            else:
+                GUEST_ROLES.clear()
+                GUEST_ROLES.update(DEFAULT_GUEST_ROLES)
+                for sn, info in data.get("dynamic_squads", {}).items():
+                    if info.get("guest_role"):
+                        GUEST_ROLES[sn] = info["guest_role"]
+                for sn, si in data.get("squads", {}).items():
+                    if si.get("disbanded") and sn in GUEST_ROLES:
+                        del GUEST_ROLES[sn]
+                data["guest_registry"] = dict(GUEST_ROLES)
+
+            # Ensure every active squad has a data entry
+            for sn in list(SQUADS.keys()):
+                if sn not in data["squads"]:
+                    data["squads"][sn] = _new_squad_entry()
+
             ALL_TAGS = list(SQUADS.values())
+            save_data(data)
             return data
 
-    data = {"squads": {}, "players": {}, "matches": [], "dynamic_squads": {}}
-    for squad_name in SQUADS.keys():
-        data["squads"][squad_name] = {
-            "wins": 0, "draws": 0, "losses": 0, "points": 0,
-            "titles": [], "championship_wins": 0, "logo_url": None,
-            "main_roster": [], "subs": [], "match_history": [],
-            "current_streak": {"type": "none", "count": 0},
-            "achievements": [], "biggest_win_streak": 0, "biggest_loss_streak": 0
-        }
+    # First run — seed from defaults
+    SQUADS.clear()
+    SQUADS.update(DEFAULT_SQUADS)
+    GUEST_ROLES.clear()
+    GUEST_ROLES.update(DEFAULT_GUEST_ROLES)
+    ALL_TAGS = list(SQUADS.values())
+
+    data = {
+        "squads": {}, "players": {}, "matches": [],
+        "squad_registry": dict(SQUADS),
+        "guest_registry": dict(GUEST_ROLES),
+    }
+    for sn in SQUADS:
+        data["squads"][sn] = _new_squad_entry()
     save_data(data)
     return data
 
@@ -205,15 +257,8 @@ def save_data(data):
 
 
 def init_squad_data(squad_name):
-    """Initialize squad stats entry if missing."""
     if squad_name not in squad_data["squads"]:
-        squad_data["squads"][squad_name] = {
-            "wins": 0, "draws": 0, "losses": 0, "points": 0,
-            "titles": [], "championship_wins": 0, "logo_url": None,
-            "main_roster": [], "subs": [], "match_history": [],
-            "current_streak": {"type": "none", "count": 0},
-            "achievements": [], "biggest_win_streak": 0, "biggest_loss_streak": 0
-        }
+        squad_data["squads"][squad_name] = _new_squad_entry()
 
 
 async def add_new_squad(guild, squad_name: str, tag: str, guest_role_name: str = None):
@@ -246,13 +291,9 @@ async def add_new_squad(guild, squad_name: str, tag: str, guest_role_name: str =
         GUEST_ROLES[squad_name] = guest_role_name
     ALL_TAGS = list(SQUADS.values())
 
-    # Persist to data
-    if "dynamic_squads" not in squad_data:
-        squad_data["dynamic_squads"] = {}
-    squad_data["dynamic_squads"][squad_name] = {
-        "tag": tag,
-        "guest_role": guest_role_name or ""
-    }
+    # Persist to registries (single source of truth)
+    squad_data["squad_registry"] = dict(SQUADS)
+    squad_data["guest_registry"] = dict(GUEST_ROLES)
 
     init_squad_data(squad_name)
     save_data(squad_data)
@@ -288,9 +329,9 @@ async def remove_existing_squad(guild, squad_name: str, delete_roles: bool = Tru
     GUEST_ROLES.pop(squad_name, None)
     ALL_TAGS = list(SQUADS.values())
 
-    # Remove from dynamic storage
-    if "dynamic_squads" in squad_data:
-        squad_data["dynamic_squads"].pop(squad_name, None)
+    # Persist registries (single source of truth)
+    squad_data["squad_registry"] = dict(SQUADS)
+    squad_data["guest_registry"] = dict(GUEST_ROLES)
 
     # Keep squad_data["squads"] entry for historical records but mark disbanded
     if squad_name in squad_data["squads"]:
@@ -385,7 +426,7 @@ def get_squad_ranking():
         total = data["wins"] + data["draws"] + data["losses"]
         wr = (data["wins"] / total * 100) if total > 0 else 0.0
         rankings.append({
-            "name": squad_name, "tag": SQUADS[squad_name], "points": data["points"],
+            "name": squad_name, "tag": SQUADS.get(squad_name, "?"), "points": data["points"],
             "wins": data["wins"], "draws": data["draws"], "losses": data["losses"],
             "win_rate": wr, "total_matches": total
         })
@@ -870,11 +911,11 @@ def generate_realm_news():
         try:
             s1, s2 = map(int, score.split('-'))
             if s1 > s2:
-                headlines.append(f"⚔️ **{SQUADS[t1]} {t1}** triumphs over **{SQUADS[t2]} {t2}** ({score}) in the latest battle!")
+                headlines.append(f"⚔️ **{SQUADS.get(t1, "?")} {t1}** triumphs over **{SQUADS.get(t2, "?")} {t2}** ({score}) in the latest battle!")
             elif s2 > s1:
-                headlines.append(f"⚔️ **{SQUADS[t2]} {t2}** triumphs over **{SQUADS[t1]} {t1}** ({score}) in the latest battle!")
+                headlines.append(f"⚔️ **{SQUADS.get(t2, "?")} {t2}** triumphs over **{SQUADS.get(t1, "?")} {t1}** ({score}) in the latest battle!")
             else:
-                headlines.append(f"⚖️ **{SQUADS[t1]} {t1}** and **{SQUADS[t2]} {t2}** battle to a stalemate ({score})!")
+                headlines.append(f"⚖️ **{SQUADS.get(t1, "?")} {t1}** and **{SQUADS.get(t2, "?")} {t2}** battle to a stalemate ({score})!")
         except:
             pass
 
@@ -889,9 +930,9 @@ def generate_realm_news():
             coldest_name, coldest_count = sn, cs["count"]
 
     if hottest_name and hottest_count >= 2:
-        headlines.append(f"🔥 **{SQUADS[hottest_name]} {hottest_name}** is ON FIRE with a **{hottest_count}-win streak**! Who can stop them?")
+        headlines.append(f"🔥 **{SQUADS.get(hottest_name, "?")} {hottest_name}** is ON FIRE with a **{hottest_count}-win streak**! Who can stop them?")
     if coldest_name and coldest_count >= 3:
-        headlines.append(f"❄️ **{SQUADS[coldest_name]} {coldest_name}** struggles through a **{coldest_count}-loss streak**. Can they turn it around?")
+        headlines.append(f"❄️ **{SQUADS.get(coldest_name, "?")} {coldest_name}** struggles through a **{coldest_count}-loss streak**. Can they turn it around?")
 
     # 3. Championship leader
     if rankings:
@@ -967,7 +1008,7 @@ class MatchPredictorStep1View(View):
         team1 = interaction.data["values"][0]
         embed = discord.Embed(
             title="🔮 War Oracle — Step 2",
-            description=f"✅ Kingdom 1: **{SQUADS[team1]} {team1}**\n\nNow select the **opponent**:",
+            description=f"✅ Kingdom 1: **{SQUADS.get(team1, "?")} {team1}**\n\nNow select the **opponent**:",
             color=ROYAL_PURPLE
         )
         await interaction.response.edit_message(embed=embed, view=MatchPredictorStep2View(team1))
@@ -1012,7 +1053,7 @@ class MatchPredictorStep2View(View):
 
         embed = discord.Embed(
             title=f"🔮 War Oracle — Match Prediction",
-            description=f"**{SQUADS[self.team1]} {self.team1}** ⚔️ **{SQUADS[team2]} {team2}**\n\n{pred['narrative']}",
+            description=f"**{SQUADS.get(self.team1, "?")} {self.team1}** ⚔️ **{SQUADS.get(team2, "?")} {team2}**\n\n{pred['narrative']}",
             color=ROYAL_PURPLE
         )
 
@@ -1096,6 +1137,10 @@ class SetLogoModal(Modal, title="🖼️ Set Kingdom Emblem"):
 # -------------------- SQUAD INFO DISPLAY --------------------
 async def show_squad_info(interaction, squad_role, squad_name, tag, public=False, edit=False):
     """Display squad info with embedded history button"""
+    # Auto-create data entry if missing (e.g. newly added squad)
+    if squad_name not in squad_data["squads"]:
+        squad_data["squads"][squad_name] = _new_squad_entry()
+        save_data(squad_data)
     si = squad_data["squads"].get(squad_name, {})
     rank = get_squad_rank(squad_name)
     re = "🥇" if rank == 1 else "🥈" if rank == 2 else "🥉" if rank == 3 else "🏅"
@@ -1219,7 +1264,7 @@ class SquadProfileView(View):
         view = SquadSelectorView(purpose="rivalry_step2", selected_squad1=self.squad_name)
         embed = discord.Embed(
             title="⚔️ Kingdom Rivalry",
-            description=f"✅ First Kingdom: **{SQUADS[self.squad_name]} {self.squad_name}**\n\nSelect the rival kingdom:",
+            description=f"✅ First Kingdom: **{SQUADS.get(self.squad_name, "?")} {self.squad_name}**\n\nSelect the rival kingdom:",
             color=ROYAL_BLUE
         )
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
@@ -1235,7 +1280,7 @@ class SquadProfileView(View):
         tier_name, tier_desc = report["threat_tier"]
 
         embed = discord.Embed(
-            title=f"🧠 Intelligence Report — {SQUADS[self.squad_name]} {self.squad_name}",
+            title=f"🧠 Intelligence Report — {SQUADS.get(self.squad_name, "?")} {self.squad_name}",
             description=f"{tier_name} — *{tier_desc}*",
             color=ROYAL_PURPLE
         )
@@ -1275,7 +1320,7 @@ async def show_squad_match_history(interaction, squad_name):
         return
 
     recent = matches[-10:][::-1]
-    embed = discord.Embed(title=f"📜 {SQUADS[squad_name]} {squad_name} — Battle History", description=f"Last {len(recent)} battles", color=ROYAL_BLUE)
+    embed = discord.Embed(title=f"📜 {SQUADS.get(squad_name, "?")} {squad_name} — Battle History", description=f"Last {len(recent)} battles", color=ROYAL_BLUE)
     for m in recent:
         t1, t2, score, mid = m["team1"], m["team2"], m["score"], m.get("match_id", "?")
         try:
@@ -1291,7 +1336,7 @@ async def show_squad_match_history(interaction, squad_name):
                 re, rt = ("🏆", "Victory") if s2 > s1 else ("💀", "Defeat") if s1 > s2 else ("⚖️", "Draw")
         except:
             re, rt = "⚔️", "Battle"
-        embed.add_field(name=f"{re} {SQUADS[t1]} vs {SQUADS[t2]} — {rt}", value=f"**{t1}** {score} **{t2}**\n📅 {ds} • 🆔 `{mid}`", inline=False)
+        embed.add_field(name=f"{re} {SQUADS.get(t1, "?")} vs {SQUADS.get(t2, "?")} — {rt}", value=f"**{t1}** {score} **{t2}**\n📅 {ds} • 🆔 `{mid}`", inline=False)
 
     if len(matches) > 10:
         embed.set_footer(text=f"Showing last 10 of {len(matches)} battles")
@@ -1314,9 +1359,13 @@ class SquadSelectorView(View):
         self.page = page
 
         all_squads = sorted(SQUADS.items())
+        if not all_squads:
+            return
         start = (page - 1) * 25
         end = start + 25
         page_squads = all_squads[start:end]
+        if not page_squads:
+            return
 
         placeholders = {
             "browse": "🏰 Select a kingdom to explore...",
@@ -1324,17 +1373,18 @@ class SquadSelectorView(View):
         }
         ph = placeholders.get(purpose, "Select a kingdom...")
 
-        options = [discord.SelectOption(label=n, value=n, emoji="🏰", description=f"Tag: {t}") for n, t in page_squads]
+        options = [discord.SelectOption(label=str(n)[:100], value=str(n)[:100], description=f"Tag: {t}"[:100]) for n, t in page_squads]
         select = Select(placeholder=ph, options=options)
         select.callback = self.selected
         self.add_item(select)
 
-        if len(all_squads) > 25:
+        total_pages = (len(all_squads) + 24) // 25
+        if total_pages > 1:
             if page > 1:
                 b = Button(label="← Prev", style=discord.ButtonStyle.secondary)
                 b.callback = self.prev_page
                 self.add_item(b)
-            if end < len(all_squads):
+            if page < total_pages:
                 b = Button(label="Next →", style=discord.ButtonStyle.secondary)
                 b.callback = self.next_page
                 self.add_item(b)
@@ -1348,12 +1398,18 @@ class SquadSelectorView(View):
         await interaction.response.edit_message(view=v)
 
     async def selected(self, interaction):
-        sq = interaction.data["values"][0]
-        if self.purpose == "browse":
-            sr = discord.utils.get(interaction.guild.roles, name=sq)
-            await show_squad_info(interaction, sr, sq, SQUADS.get(sq, "?"), public=True, edit=True)
-        elif self.purpose == "rivalry_step2":
-            await show_rivalry_stats(interaction, self.selected_squad1, sq)
+        try:
+            sq = interaction.data["values"][0]
+            if self.purpose == "browse":
+                sr = discord.utils.get(interaction.guild.roles, name=sq)
+                await show_squad_info(interaction, sr, sq, SQUADS.get(sq, "?"), public=True, edit=True)
+            elif self.purpose == "rivalry_step2":
+                await show_rivalry_stats(interaction, self.selected_squad1, sq)
+        except Exception as e:
+            try:
+                await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
+            except:
+                pass
 
 
 async def show_rivalry_stats(interaction, sq1, sq2):
@@ -1369,7 +1425,7 @@ async def show_rivalry_stats(interaction, sq1, sq2):
             await interaction.response.send_message(embed=embed, ephemeral=True)
         return
 
-    embed = discord.Embed(title="⚔️ Kingdom Rivalry", description=f"**{SQUADS[sq1]} {sq1}** vs **{SQUADS[sq2]} {sq2}**", color=ROYAL_RED)
+    embed = discord.Embed(title="⚔️ Kingdom Rivalry", description=f"**{SQUADS.get(sq1, "?")} {sq1}** vs **{SQUADS.get(sq2, "?")} {sq2}**", color=ROYAL_RED)
     embed.add_field(name="📊 Head-to-Head", value=f"Total: **{h2h['total']}**\n\n🏆 {sq1}: **{h2h['squad1_wins']}**\n🏆 {sq2}: **{h2h['squad2_wins']}**\n🤝 Draws: **{h2h['draws']}**", inline=False)
 
     if h2h["squad1_wins"] > h2h["squad2_wins"]:
@@ -1601,7 +1657,7 @@ def build_profile_embed(member: discord.Member, guild: discord.Guild):
     sn = pd.get("squad")
     sr = None; st = "?"
     if sn and sn in SQUADS:
-        st = SQUADS[sn]
+        st = SQUADS.get(sn, "?")
         sr = discord.utils.get(guild.roles, name=sn)
 
     stats = get_player_stats(member.id)
@@ -1732,13 +1788,13 @@ class SearchMemberModal(Modal, title="🔍 Search Member"):
                     await member.remove_roles(role)
 
             await member.add_roles(squad_role)
-            await safe_nick_update(member, squad_role, SQUADS[squad_name])
+            await safe_nick_update(member, squad_role, SQUADS.get(squad_name, "?"))
             update_player_squad(member.id, squad_name, existing_role.name if existing_role else None)
 
             quote = random.choice(RECRUIT_QUOTES)
             embed = discord.Embed(
                 title="➕ Warrior Recruited!",
-                description=f"{member.mention} has joined **{SQUADS[squad_name]} {squad_name}**!\n\n*{quote}*",
+                description=f"{member.mention} has joined **{SQUADS.get(squad_name, "?")} {squad_name}**!\n\n*{quote}*",
                 color=ROYAL_GREEN
             )
             embed.set_thumbnail(url=member.display_avatar.url)
@@ -1765,7 +1821,7 @@ class SearchMemberModal(Modal, title="🔍 Search Member"):
             quote = random.choice(GUEST_QUOTES)
             embed = discord.Embed(
                 title="🎭 Guest Access Granted!",
-                description=f"{member.mention} is now a guest of **{SQUADS[squad_name]} {squad_name}**!\n\n*{quote}*",
+                description=f"{member.mention} is now a guest of **{SQUADS.get(squad_name, "?")} {squad_name}**!\n\n*{quote}*",
                 color=ROYAL_GREEN
             )
             embed.set_thumbnail(url=member.display_avatar.url)
@@ -2068,7 +2124,7 @@ class RecordBattleStep1View(View):
         team1 = interaction.data["values"][0]
         embed = discord.Embed(
             title="⚔️ Record Battle — Step 2/3",
-            description=f"✅ First Kingdom: **{SQUADS[team1]} {team1}**\n\nNow select the **second** kingdom:",
+            description=f"✅ First Kingdom: **{SQUADS.get(team1, "?")} {team1}**\n\nNow select the **second** kingdom:",
             color=ROYAL_BLUE
         )
         await interaction.response.edit_message(embed=embed, view=RecordBattleStep2View(team1))
@@ -2113,7 +2169,7 @@ class RecordBattleStep2View(View):
         embed = discord.Embed(
             title=f"🔮 Pre-Battle Oracle",
             description=(
-                f"**{SQUADS[self.team1]} {self.team1}** ⚔️ **{SQUADS[team2]} {team2}**\n\n"
+                f"**{SQUADS.get(self.team1, "?")} {self.team1}** ⚔️ **{SQUADS.get(team2, "?")} {team2}**\n\n"
                 f"{pred['narrative']}\n\n"
                 f"🟦 {self.team1}: **{pred['t1_pct']}%** {t1_bar}\n"
                 f"🟥 {team2}: **{pred['t2_pct']}%** {t2_bar}\n"
@@ -2142,7 +2198,7 @@ class RecordBattleScoreModal(Modal, title="⚔️ Enter Battle Score"):
         super().__init__()
         self.team1_name = team1
         self.team2_name = team2
-        self.result.label = f"{SQUADS[team1]} vs {SQUADS[team2]} score"
+        self.result.label = f"{SQUADS.get(team1, "?")} vs {SQUADS.get(team2, "?")} score"
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
@@ -2205,13 +2261,13 @@ class RecordBattleScoreModal(Modal, title="⚔️ Enter Battle Score"):
         if team1_streak["count"] >= 3:
             se = "🔥" if team1_streak["type"] == "win" else "❄️" if team1_streak["type"] == "loss" else "⚡"
             t1i += f"\n{se} **{team1_streak['count']} {team1_streak['type'].upper()} STREAK!**"
-        embed.add_field(name=f"{SQUADS[self.team1_name]} {self.team1_name}", value=t1i, inline=False)
+        embed.add_field(name=f"{SQUADS.get(self.team1_name, "?")} {self.team1_name}", value=t1i, inline=False)
 
         t2i = f"💎 {team2_data['points']} points | 🏆 {team2_data['wins']}W ⚔️ {team2_data['draws']}D 💀 {team2_data['losses']}L"
         if team2_streak["count"] >= 3:
             se = "🔥" if team2_streak["type"] == "win" else "❄️" if team2_streak["type"] == "loss" else "⚡"
             t2i += f"\n{se} **{team2_streak['count']} {team2_streak['type'].upper()} STREAK!**"
-        embed.add_field(name=f"{SQUADS[self.team2_name]} {self.team2_name}", value=t2i, inline=False)
+        embed.add_field(name=f"{SQUADS.get(self.team2_name, "?")} {self.team2_name}", value=t2i, inline=False)
 
         if team1_achievements or team2_achievements:
             at = ""
@@ -2894,8 +2950,6 @@ async def restore_command(interaction: discord.Interaction, backup: discord.Atta
         # Ensure required fields exist
         if "players" not in new_data:
             new_data["players"] = {}
-        if "dynamic_squads" not in new_data:
-            new_data["dynamic_squads"] = {}
 
         # Fill in any missing squad entries
         for match in new_data.get("matches", []):
@@ -2904,11 +2958,36 @@ async def restore_command(interaction: discord.Interaction, backup: discord.Atta
             if "team2_participants" not in match:
                 match["team2_participants"] = []
 
-        # Load dynamic squads into runtime
-        for sn, info in new_data.get("dynamic_squads", {}).items():
-            SQUADS[sn] = info["tag"]
-            if info.get("guest_role"):
-                GUEST_ROLES[sn] = info["guest_role"]
+        # Rebuild registries from backup
+        if "squad_registry" in new_data:
+            SQUADS.clear()
+            SQUADS.update(new_data["squad_registry"])
+        else:
+            # Old backup format — rebuild from defaults + dynamic
+            SQUADS.clear()
+            SQUADS.update(DEFAULT_SQUADS)
+            for sn, info in new_data.get("dynamic_squads", {}).items():
+                SQUADS[sn] = info.get("tag", "?")
+            for sn, si in new_data.get("squads", {}).items():
+                if si.get("disbanded") and sn in SQUADS:
+                    del SQUADS[sn]
+            new_data["squad_registry"] = dict(SQUADS)
+
+        if "guest_registry" in new_data:
+            GUEST_ROLES.clear()
+            GUEST_ROLES.update(new_data["guest_registry"])
+        else:
+            GUEST_ROLES.clear()
+            GUEST_ROLES.update(DEFAULT_GUEST_ROLES)
+            for sn, info in new_data.get("dynamic_squads", {}).items():
+                if info.get("guest_role"):
+                    GUEST_ROLES[sn] = info["guest_role"]
+            for sn, si in new_data.get("squads", {}).items():
+                if si.get("disbanded") and sn in GUEST_ROLES:
+                    del GUEST_ROLES[sn]
+            new_data["guest_registry"] = dict(GUEST_ROLES)
+
+        ALL_TAGS = list(SQUADS.values())
 
         # Save to disk and update runtime
         save_data(new_data)
