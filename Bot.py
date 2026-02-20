@@ -1934,12 +1934,13 @@ async def daily_pulse_task():
             )
 
         # Active challenges
-        active_ch = [c for c in squad_data.get("challenges", []) if c["status"] in ("pending", "accepted")]
+        active_ch = [c for c in squad_data.get("challenges", []) if c["status"] in ("pending", "accepted", "scheduled")]
         if active_ch:
             ch_text = ""
             for c in active_ch[:3]:
-                emoji = "⏳" if c["status"] == "pending" else "⚔️"
-                ch_text += f"{emoji} {c['challenger']} vs {c['challenged']}\n"
+                emoji = "⏳" if c["status"] == "pending" else "📅" if c["status"] == "scheduled" else "⚔️"
+                sched = f" — **{c['scheduled_date']}**" if c.get("scheduled_date") else ""
+                ch_text += f"{emoji} {c['challenger']} vs {c['challenged']}{sched}\n"
             embed.add_field(name="🎯 Open Challenges", value=ch_text, inline=True)
 
         embed.set_footer(text=f"📅 {now.strftime('%A, %B %d, %Y')} | ⚜️ Majestic Realm Pulse")
@@ -1960,9 +1961,9 @@ async def before_daily_pulse():
 # =====================================================================
 
 def get_active_challenges(squad_name=None):
-    """Get all pending/accepted challenges, optionally filtered by squad."""
+    """Get all pending/accepted/scheduled challenges, optionally filtered by squad."""
     challenges = squad_data.get("challenges", [])
-    active = [c for c in challenges if c["status"] in ("pending", "accepted")]
+    active = [c for c in challenges if c["status"] in ("pending", "accepted", "scheduled")]
     if squad_name:
         active = [c for c in active if c["challenger"] == squad_name or c["challenged"] == squad_name]
     return active
@@ -1971,7 +1972,7 @@ def get_active_challenges(squad_name=None):
 def has_pending_challenge(squad1, squad2):
     """Check if there's already an active challenge between two squads."""
     for c in squad_data.get("challenges", []):
-        if c["status"] in ("pending", "accepted"):
+        if c["status"] in ("pending", "accepted", "scheduled"):
             if (c["challenger"] == squad1 and c["challenged"] == squad2) or \
                (c["challenger"] == squad2 and c["challenged"] == squad1):
                 return True
@@ -2367,6 +2368,274 @@ class SetBountyModal(Modal, title="💰 Set Bounty"):
         await announce_challenge(interaction.guild, pub_embed)
         await log_action(interaction.guild, "💰 Bounty Set",
             f"{interaction.user.mention} placed **+{pts}** bounty on **{self.target_name}**: {reason}")
+
+
+# =====================================================================
+#                     CHALLENGE MANAGER (Moderator)
+# =====================================================================
+
+def build_challenge_manager_embed():
+    """Build the challenge manager embed."""
+    all_ch = squad_data.get("challenges", [])
+    active = [c for c in all_ch if c["status"] in ("pending", "accepted", "scheduled")]
+    embed = discord.Embed(title="🎯 Challenge Manager", color=ROYAL_RED)
+    if not active:
+        embed.description = "*No active challenges. Leaders can issue challenges from `/leader`.*"
+    else:
+        for c in active[:15]:
+            if c["status"] == "pending":
+                status = "⏳ PENDING"
+            elif c["status"] == "accepted":
+                status = "⚔️ ACCEPTED"
+            else:
+                status = "📅 SCHEDULED"
+            ds = ""
+            try:
+                ds = datetime.fromisoformat(c["date"]).strftime("%b %d")
+            except:
+                pass
+            sched = ""
+            if c.get("scheduled_date"):
+                sched = f"\n📅 **Match: {c['scheduled_date']}**"
+            embed.add_field(
+                name=f"{SQUADS.get(c['challenger'], '?')} {c['challenger']} vs {SQUADS.get(c['challenged'], '?')} {c['challenged']}",
+                value=f"{status} | Issued {ds} | 🆔 `{c['id']}`{sched}",
+                inline=False
+            )
+    total = len(all_ch)
+    completed = len([c for c in all_ch if c["status"] == "completed"])
+    declined = len([c for c in all_ch if c["status"] == "declined"])
+    embed.set_footer(text=f"📊 {len(active)} active | {completed} completed | {declined} declined | {total} total all-time")
+    return embed
+
+
+class ManageChallengesView(View):
+    """Mod challenge manager — schedule, cancel, clear."""
+    def __init__(self):
+        super().__init__(timeout=180)
+
+    @discord.ui.button(label="Schedule Match", style=discord.ButtonStyle.success, emoji="📅", row=0)
+    async def schedule_btn(self, interaction: discord.Interaction, button: Button):
+        active = [c for c in squad_data.get("challenges", []) if c["status"] in ("accepted", "scheduled")]
+        if not active:
+            await interaction.response.send_message("❌ No accepted challenges to schedule. Challenges must be accepted first.", ephemeral=True)
+            return
+        await interaction.response.edit_message(
+            embed=discord.Embed(title="📅 Schedule Match", description="Select the challenge to schedule:", color=ROYAL_GREEN),
+            view=ScheduleChallengeSelectView()
+        )
+
+    @discord.ui.button(label="Cancel Challenge", style=discord.ButtonStyle.danger, emoji="❌", row=0)
+    async def cancel_btn(self, interaction: discord.Interaction, button: Button):
+        active = [c for c in squad_data.get("challenges", []) if c["status"] in ("pending", "accepted", "scheduled")]
+        if not active:
+            await interaction.response.send_message("❌ No active challenges to cancel.", ephemeral=True)
+            return
+        await interaction.response.edit_message(
+            embed=discord.Embed(title="❌ Cancel Challenge", description="Select a challenge to cancel:", color=ROYAL_RED),
+            view=CancelChallengeSelectView()
+        )
+
+    @discord.ui.button(label="Clear Old", style=discord.ButtonStyle.danger, emoji="🗑️", row=0)
+    async def clear_btn(self, interaction: discord.Interaction, button: Button):
+        before = len(squad_data.get("challenges", []))
+        squad_data["challenges"] = [c for c in squad_data.get("challenges", [])
+                                    if c["status"] in ("pending", "accepted", "scheduled")]
+        after = len(squad_data["challenges"])
+        removed = before - after
+        save_data(squad_data)
+        embed = build_challenge_manager_embed()
+        if removed > 0:
+            embed.description = f"🗑️ Cleared **{removed}** completed/declined challenges.\n\n" + (embed.description or "")
+        else:
+            embed.description = "ℹ️ No old challenges to clear.\n\n" + (embed.description or "")
+        await interaction.response.edit_message(embed=embed, view=ManageChallengesView())
+        if removed > 0:
+            await log_action(interaction.guild, "🗑️ Challenges Cleared",
+                f"{interaction.user.mention} cleared **{removed}** old challenges")
+
+    @discord.ui.button(label="Refresh", style=discord.ButtonStyle.secondary, emoji="🔄", row=1)
+    async def refresh_btn(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.edit_message(embed=build_challenge_manager_embed(), view=ManageChallengesView())
+
+
+class ScheduleChallengeSelectView(View):
+    """Select an accepted challenge to schedule."""
+    def __init__(self):
+        super().__init__(timeout=180)
+        active = [c for c in squad_data.get("challenges", []) if c["status"] in ("accepted", "scheduled")]
+        if not active:
+            return
+        options = []
+        for c in active[:25]:
+            tag1 = SQUADS.get(c["challenger"], "?")
+            tag2 = SQUADS.get(c["challenged"], "?")
+            label = f"{tag1} {c['challenger']} vs {tag2} {c['challenged']}"[:100]
+            status_desc = f"{'📅 ' + c['scheduled_date'] if c.get('scheduled_date') else c['status'].upper()} | {c['id']}"[:100]
+            options.append(discord.SelectOption(label=label, value=c["id"], description=status_desc))
+        if options:
+            select = Select(placeholder="📅 Select challenge to schedule...", options=options)
+            select.callback = self.selected
+            self.add_item(select)
+
+    async def selected(self, interaction):
+        cid = interaction.data["values"][0]
+        # Find the challenge
+        challenge = None
+        for c in squad_data.get("challenges", []):
+            if c["id"] == cid:
+                challenge = c
+                break
+        if not challenge:
+            await interaction.response.send_message("❌ Challenge not found.", ephemeral=True)
+            return
+        existing_date = challenge.get("scheduled_date", "")
+        await interaction.response.send_modal(ScheduleDateModal(cid, existing_date))
+
+
+class ScheduleDateModal(Modal, title="📅 Schedule Match Date"):
+    def __init__(self, challenge_id, existing_date=""):
+        super().__init__()
+        self.challenge_id = challenge_id
+        self.match_date = TextInput(
+            label="Match Date & Time",
+            placeholder="e.g., Feb 25, 8:00 PM EST",
+            default=existing_date,
+            required=True,
+            max_length=100
+        )
+        self.match_notes = TextInput(
+            label="Notes (optional)",
+            placeholder="e.g., Best of 3, custom rules, etc.",
+            required=False,
+            max_length=200
+        )
+        self.add_item(self.match_date)
+        self.add_item(self.match_notes)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        date_str = self.match_date.value.strip()
+        notes = self.match_notes.value.strip() if self.match_notes.value else ""
+
+        # Find and update the challenge
+        challenge = None
+        for c in squad_data.get("challenges", []):
+            if c["id"] == self.challenge_id:
+                c["status"] = "scheduled"
+                c["scheduled_date"] = date_str
+                c["scheduled_notes"] = notes
+                c["scheduled_by"] = interaction.user.id
+                challenge = c
+                break
+
+        if not challenge:
+            await interaction.response.send_message("❌ Challenge not found.", ephemeral=True)
+            return
+
+        save_data(squad_data)
+
+        tag1 = SQUADS.get(challenge["challenger"], "?")
+        tag2 = SQUADS.get(challenge["challenged"], "?")
+
+        embed = discord.Embed(
+            title="📅 Match Scheduled!",
+            description=(
+                f"**{tag1} {challenge['challenger']}** vs **{tag2} {challenge['challenged']}**\n\n"
+                f"📅 **{date_str}**"
+            ),
+            color=ROYAL_GREEN
+        )
+        if notes:
+            embed.add_field(name="📋 Notes", value=notes, inline=False)
+        embed.set_footer(text=f"Challenge ID: {self.challenge_id}")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        # Public announcement in #war-results
+        pub_embed = discord.Embed(
+            title="📅 MATCH SCHEDULED!",
+            description=(
+                f"**{tag1} {challenge['challenger']}** vs **{tag2} {challenge['challenged']}**\n\n"
+                f"🗓️ **{date_str}**\n\n"
+                f"*The battlefield has been chosen. Prepare for war!*"
+            ),
+            color=ROYAL_GREEN
+        )
+        if notes:
+            pub_embed.add_field(name="📋 Details", value=notes, inline=False)
+        if challenge.get("message"):
+            pub_embed.add_field(name="📜 War Declaration", value=f"*\"{challenge['message']}\"*", inline=False)
+        pub_embed.set_footer(text=f"Challenge ID: {self.challenge_id} | ⚜️ May the best kingdom win!")
+
+        # Ping both kingdom roles
+        guild = interaction.guild
+        r1 = discord.utils.get(guild.roles, name=challenge["challenger"])
+        r2 = discord.utils.get(guild.roles, name=challenge["challenged"])
+        mentions = []
+        if r1: mentions.append(r1.mention)
+        if r2: mentions.append(r2.mention)
+        mention_text = " ".join(mentions) if mentions else ""
+
+        await announce_event(guild, pub_embed, content=f"📅 {mention_text} — Your match is scheduled!" if mention_text else None)
+        await log_action(guild, "📅 Match Scheduled",
+            f"{interaction.user.mention} scheduled **{challenge['challenger']}** vs **{challenge['challenged']}** for **{date_str}**" +
+            (f" | Notes: {notes}" if notes else ""))
+
+
+class CancelChallengeSelectView(View):
+    """Select a challenge to cancel."""
+    def __init__(self):
+        super().__init__(timeout=180)
+        active = [c for c in squad_data.get("challenges", []) if c["status"] in ("pending", "accepted", "scheduled")]
+        if not active:
+            return
+        options = []
+        for c in active[:25]:
+            tag1 = SQUADS.get(c["challenger"], "?")
+            tag2 = SQUADS.get(c["challenged"], "?")
+            label = f"{tag1} {c['challenger']} vs {tag2} {c['challenged']}"[:100]
+            sched = f" | 📅 {c['scheduled_date']}" if c.get("scheduled_date") else ""
+            status_desc = f"{c['status'].upper()}{sched} | {c['id']}"[:100]
+            options.append(discord.SelectOption(label=label, value=c["id"], description=status_desc))
+        if options:
+            select = Select(placeholder="❌ Select challenge to cancel...", options=options)
+            select.callback = self.selected
+            self.add_item(select)
+
+    async def selected(self, interaction):
+        cid = interaction.data["values"][0]
+        challenge = None
+        for c in squad_data.get("challenges", []):
+            if c["id"] == cid and c["status"] in ("pending", "accepted", "scheduled"):
+                c["status"] = "cancelled"
+                c["cancelled_by"] = interaction.user.id
+                challenge = c
+                break
+
+        if not challenge:
+            await interaction.response.send_message("❌ Challenge not found or already resolved.", ephemeral=True)
+            return
+
+        save_data(squad_data)
+        tag1 = SQUADS.get(challenge["challenger"], "?")
+        tag2 = SQUADS.get(challenge["challenged"], "?")
+
+        embed = discord.Embed(
+            title="❌ Challenge Cancelled",
+            description=f"**{tag1} {challenge['challenger']}** vs **{tag2} {challenge['challenged']}** has been cancelled by a moderator.",
+            color=ROYAL_RED
+        )
+        await interaction.response.edit_message(embed=embed, view=None)
+
+        # Public announcement
+        pub_embed = discord.Embed(
+            title="❌ CHALLENGE CANCELLED",
+            description=f"The challenge between **{tag1} {challenge['challenger']}** and **{tag2} {challenge['challenged']}** has been cancelled.",
+            color=discord.Color.greyple()
+        )
+        pub_embed.set_footer(text=f"Cancelled by moderator | Challenge ID: {cid}")
+        await announce_event(interaction.guild, pub_embed)
+        await log_action(interaction.guild, "❌ Challenge Cancelled",
+            f"{interaction.user.mention} cancelled challenge **{challenge['challenger']}** vs **{challenge['challenged']}** (ID: {cid})")
 
 
 # =====================================================================
@@ -2810,7 +3079,12 @@ class MemberPanelView(View):
             embed.description = "*No active challenges right now. Leaders can issue challenges from their panel!*"
         else:
             for c in active[:10]:
-                status = "⏳ PENDING" if c["status"] == "pending" else "⚔️ ACCEPTED — Battle is ON!"
+                if c["status"] == "pending":
+                    status = "⏳ PENDING"
+                elif c["status"] == "scheduled":
+                    status = f"📅 SCHEDULED — **{c.get('scheduled_date', '?')}**"
+                else:
+                    status = "⚔️ ACCEPTED — Awaiting schedule"
                 ds = ""
                 try:
                     ds = datetime.fromisoformat(c["date"]).strftime("%b %d")
@@ -2819,7 +3093,7 @@ class MemberPanelView(View):
                 msg_text = f"\n📜 *\"{c['message']}\"*" if c.get("message") else ""
                 embed.add_field(
                     name=f"{SQUADS.get(c['challenger'], '?')} {c['challenger']} vs {SQUADS.get(c['challenged'], '?')} {c['challenged']}",
-                    value=f"{status}{msg_text}\n📅 {ds} | 🆔 `{c['id']}`",
+                    value=f"{status}{msg_text}\n📅 Issued {ds} | 🆔 `{c['id']}`",
                     inline=False
                 )
         embed.set_footer(text="⚜️ Leaders issue challenges from /leader panel")
@@ -3142,7 +3416,7 @@ class RecordBattleScoreModal(Modal, title="⚔️ Enter Battle Score"):
 
         # Auto-complete any active challenge between these two
         for c in squad_data.get("challenges", []):
-            if c["status"] == "accepted":
+            if c["status"] in ("accepted", "scheduled"):
                 if (c["challenger"] == self.team1_name and c["challenged"] == self.team2_name) or \
                    (c["challenger"] == self.team2_name and c["challenged"] == self.team1_name):
                     c["status"] = "completed"
@@ -3946,26 +4220,29 @@ class ModeratorPanelView(View):
     @discord.ui.button(label="Challenges", style=discord.ButtonStyle.secondary, emoji="🎯", row=4)
     async def challenges_btn(self, interaction: discord.Interaction, button: Button):
         all_ch = squad_data.get("challenges", [])
-        active = [c for c in all_ch if c["status"] in ("pending", "accepted")]
+        active = [c for c in all_ch if c["status"] in ("pending", "accepted", "scheduled")]
         embed = discord.Embed(title="🎯 Challenge Manager", color=ROYAL_RED)
         if not active:
             embed.description = "*No active challenges.*"
         else:
             for c in active[:10]:
-                status = "⏳ PENDING" if c["status"] == "pending" else "⚔️ ACCEPTED"
+                status = "⏳ PENDING" if c["status"] == "pending" else "⚔️ ACCEPTED" if c["status"] == "accepted" else "📅 SCHEDULED"
                 ds = ""
                 try:
                     ds = datetime.fromisoformat(c["date"]).strftime("%b %d")
                 except:
                     pass
+                sched = ""
+                if c.get("scheduled_date"):
+                    sched = f"\n📅 **Scheduled: {c['scheduled_date']}**"
                 embed.add_field(
                     name=f"{SQUADS.get(c['challenger'], '?')} {c['challenger']} vs {SQUADS.get(c['challenged'], '?')} {c['challenged']}",
-                    value=f"{status} | 📅 {ds} | 🆔 `{c['id']}`",
+                    value=f"{status} | 📅 Issued {ds} | 🆔 `{c['id']}`{sched}",
                     inline=False
                 )
-        embed.set_footer(text="Record a battle between challenged kingdoms to auto-complete the challenge")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-        await log_action(interaction.guild, "🎯 Challenges", f"{interaction.user.mention} viewed **Challenge Manager**")
+        embed.set_footer(text="Use buttons below to manage challenges")
+        await interaction.response.send_message(embed=embed, view=ManageChallengesView(), ephemeral=True)
+        await log_action(interaction.guild, "🎯 Challenges", f"{interaction.user.mention} opened **Challenge Manager**")
 
 
 async def show_recent_matches(interaction, limit=10):
@@ -4080,7 +4357,8 @@ class HelpView(View):
             embed.add_field(name="✏️ Edit Kingdom", value="Edit a kingdom's name, tag, or guest role — renames Discord roles too", inline=False)
             embed.add_field(name="💀 Remove Kingdom", value="Disband a kingdom — optionally delete Discord roles too", inline=False)
             embed.add_field(name="💰 Bounties", value="Add, remove, or clear all bounties — full bounty manager", inline=False)
-            embed.add_field(name="🎯 Challenges", value="View and manage all active war challenges", inline=False)
+            embed.add_field(name="🎯 Challenges", value="Schedule matches, cancel challenges, clear old ones — full challenge manager", inline=False)
+            embed.add_field(name="📋 /profiles", value="View all completed and incomplete warrior profiles with counts", inline=False)
         else:  # help
             embed = discord.Embed(title="📜 Majestic Help", description="Quick guide to all commands", color=ROYAL_PURPLE)
             embed.add_field(name="🎯 Slash Commands", value=(
@@ -4088,6 +4366,7 @@ class HelpView(View):
                 "`/leader` — Leader panel (manage roster & kingdom)\n"
                 "`/mod` — Moderator panel (matches & titles)\n"
                 "`/profile @user` — View anyone's profile\n"
+                "`/profiles` — View all completed profiles (mod only)\n"
                 "`/restore` — Restore data from backup (mod only)\n"
                 "`/help` — This help menu"
             ), inline=False)
@@ -4202,9 +4481,10 @@ async def leader_command(interaction: discord.Interaction):
         ch_text = ""
         for c in active_ch[:3]:
             opp = c["challenged"] if c["challenger"] == sr.name else c["challenger"]
-            status_e = "⏳" if c["status"] == "pending" else "⚔️"
+            status_e = "⏳" if c["status"] == "pending" else "📅" if c["status"] == "scheduled" else "⚔️"
             direction = "→" if c["challenger"] == sr.name else "←"
-            ch_text += f"{status_e} {direction} **{SQUADS.get(opp, '?')} {opp}** ({c['status']})\n"
+            sched = f" — **{c['scheduled_date']}**" if c.get("scheduled_date") else ""
+            ch_text += f"{status_e} {direction} **{SQUADS.get(opp, '?')} {opp}** ({c['status']}){sched}\n"
         embed.add_field(name="🎯 Active Challenges", value=ch_text, inline=False)
 
     # Show if there's a bounty on this kingdom
@@ -4245,6 +4525,121 @@ async def profile_command(interaction: discord.Interaction, member: discord.Memb
     await log_action(interaction.guild, "👤 /profile", f"{interaction.user.mention} viewed profile of {member.mention}")
 
 
+@bot.tree.command(name="profiles", description="📋 View all completed warrior profiles (Moderator only)")
+async def profiles_command(interaction: discord.Interaction):
+    if not is_moderator(interaction.user):
+        await interaction.response.send_message("❌ Only **Moderators** can use this command.", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    guild = interaction.guild
+    completed = []
+    incomplete = []
+    no_profile = 0
+
+    for pk, pd in squad_data["players"].items():
+        ign = pd.get("ingame_name", "")
+        gid = pd.get("ingame_id", "")
+        rank = pd.get("highest_rank", "")
+        role = pd.get("role", "")
+        squad = pd.get("squad", "")
+
+        member = guild.get_member(int(pk)) if pk.isdigit() else None
+        name = member.display_name if member else f"User#{pk}"
+        mention = member.mention if member else f"`{pk}`"
+
+        if ign and gid and rank and role:
+            completed.append({
+                "name": name, "mention": mention, "ign": ign, "id": gid,
+                "rank": rank, "role": role, "squad": squad
+            })
+        else:
+            missing = []
+            if not ign: missing.append("IGN")
+            if not gid: missing.append("Game ID")
+            if not rank: missing.append("Rank")
+            if not role: missing.append("Position")
+            incomplete.append({
+                "name": name, "mention": mention, "missing": missing, "squad": squad
+            })
+
+    # Count members with no profile at all
+    all_member_ids = {str(m.id) for m in guild.members if not m.bot}
+    profiled_ids = set(squad_data["players"].keys())
+    no_profile = len(all_member_ids - profiled_ids)
+
+    # Build embeds
+    embeds = []
+
+    # Summary embed
+    summary = discord.Embed(
+        title="📋 Profile Registry",
+        description=(
+            f"✅ **{len(completed)}** completed profiles\n"
+            f"⚠️ **{len(incomplete)}** incomplete profiles\n"
+            f"❌ **{no_profile}** members with no profile\n\n"
+            f"📊 **Total server members (non-bot):** {len(all_member_ids)}"
+        ),
+        color=ROYAL_GREEN if len(completed) > len(incomplete) else ROYAL_GOLD
+    )
+    embeds.append(summary)
+
+    # Completed profiles embed(s)
+    if completed:
+        # Group by squad
+        by_squad = {}
+        for p in completed:
+            sq = p["squad"] or "Free Agent"
+            if sq not in by_squad:
+                by_squad[sq] = []
+            by_squad[sq].append(p)
+
+        comp_embed = discord.Embed(title="✅ Completed Profiles", color=ROYAL_GREEN)
+        field_count = 0
+        for sq_name in sorted(by_squad.keys()):
+            members_list = by_squad[sq_name]
+            tag = SQUADS.get(sq_name, "")
+            lines = []
+            for p in members_list[:15]:
+                lines.append(f"{p['mention']} — `{p['ign']}` | {p['rank']} | {p['role']}")
+            text = "\n".join(lines)
+            if len(members_list) > 15:
+                text += f"\n*+{len(members_list) - 15} more...*"
+            if len(text) > 1024:
+                text = text[:1020] + "..."
+            comp_embed.add_field(
+                name=f"{tag} {sq_name} ({len(members_list)})",
+                value=text,
+                inline=False
+            )
+            field_count += 1
+            if field_count >= 20:
+                embeds.append(comp_embed)
+                comp_embed = discord.Embed(title="✅ Completed Profiles (cont.)", color=ROYAL_GREEN)
+                field_count = 0
+        if field_count > 0:
+            embeds.append(comp_embed)
+
+    # Incomplete profiles embed
+    if incomplete:
+        inc_embed = discord.Embed(title="⚠️ Incomplete Profiles", color=ROYAL_GOLD)
+        lines = []
+        for p in incomplete[:25]:
+            sq_tag = SQUADS.get(p["squad"], "") if p["squad"] else ""
+            missing_str = ", ".join(p["missing"])
+            lines.append(f"{p['mention']} {sq_tag} — Missing: **{missing_str}**")
+        inc_embed.description = "\n".join(lines)
+        if len(incomplete) > 25:
+            inc_embed.set_footer(text=f"+{len(incomplete) - 25} more incomplete profiles")
+        embeds.append(inc_embed)
+
+    # Send all embeds
+    await interaction.followup.send(embeds=embeds[:10], ephemeral=True)
+    await log_action(guild, "📋 /profiles",
+        f"{interaction.user.mention} viewed **Profile Registry** ({len(completed)} complete, {len(incomplete)} incomplete)")
+
+
 @bot.tree.command(name="help", description="📜 Majestic Help — command guide")
 async def help_command(interaction: discord.Interaction):
     view = HelpView()
@@ -4258,6 +4653,7 @@ async def help_command(interaction: discord.Interaction):
         "`/leader` — Leader panel (manage roster & kingdom)\n"
         "`/mod` — Moderator panel (matches & titles)\n"
         "`/profile @user` — View anyone's profile\n"
+        "`/profiles` — All completed profiles (mod only)\n"
         "`/restore` — Restore data from backup (mod only)\n"
         "`/help` — This menu"
     ), inline=False)
