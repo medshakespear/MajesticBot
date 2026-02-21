@@ -123,50 +123,52 @@ GLORY_EXPECTED_TAX = -1       # beating much weaker team (rank 8+ below)
 
 # Fun battle quotes
 VICTORY_QUOTES = [
-    "💥 Absolute domination on the battlefield!",
-    "🔥 They came, they saw, they conquered!",
-    "⚡ Swift and merciless victory!",
-    "🌟 Legends were born in this battle!",
-    "👑 True royalty shines through combat!",
-    "💫 The stars aligned for victory!",
-    "🎯 Precision, power, perfection!",
-    "🦅 They soared above their opponents!",
-    "⚔️ Blades sang the song of triumph!",
-    "🏆 Champions forge their legacy!"
+    "👑 The crown shines brightest after battle — glory to the victors!",
+    "⚔️ By sword and sovereign will, the throne room echoes with triumph!",
+    "🏰 The castle walls tremble before such royal might!",
+    "🦁 The royal lions have feasted — none dare challenge their dominion!",
+    "💎 Jewels are added to the crown — a majestic conquest!",
+    "🗡️ The royal decree is written in steel — victory belongs to the worthy!",
+    "👑 The throne recognizes true sovereignty — kneel before the champions!",
+    "⚜️ Noble blood runs through the veins of the victorious!",
+    "🔱 By the Trident of Dominion, they have claimed their birthright!",
+    "🏰 The banners fly high — another conquest for the royal chronicles!",
+    "👑 Majesty is not given — it is seized on the battlefield!",
+    "⚔️ The court has spoken — the stronger kingdom prevails!",
 ]
 
 DEFEAT_QUOTES = [
-    "💀 A bitter lesson learned today...",
-    "🌑 Darkness fell upon the battlefield...",
-    "⛈️ The storm proved too fierce...",
-    "🥀 Even roses must wither sometimes...",
-    "🌊 Overwhelmed by the tide of battle...",
-    "❄️ Frozen by the opponent's might...",
-    "🔻 The higher they climb, the harder they fall...",
-    "🌪️ Swept away by superior tactics...",
-    "⚰️ Today belongs to their rivals...",
-    "🗡️ Outmatched, but not defeated in spirit!"
+    "💀 Even kings must bow before greater sovereigns...",
+    "🌑 The shadow of defeat falls upon the throne room...",
+    "⛈️ A storm brews over the castle — the kingdom must rebuild...",
+    "🥀 The royal gardens wither under the weight of loss...",
+    "🌊 The tides of war have swept away their banners...",
+    "❄️ A cold wind blows through the empty throne...",
+    "🔻 The crown grows heavy in the hour of defeat...",
+    "🌪️ The royal court is silenced by superior sovereignty...",
+    "⚰️ A fallen banner — but the kingdom still stands...",
+    "🗡️ Outruled, but the bloodline endures!",
 ]
 
 DRAW_QUOTES = [
-    "⚖️ Perfectly balanced, as all things should be!",
-    "🤝 Honor shared between equals!",
-    "🌓 Two forces meet in harmony!",
-    "⭐ Both sides shine with equal brilliance!",
-    "🎭 A tale of two kingdoms!",
-    "🔄 The wheel of fate spins evenly!",
-    "💠 Matched in skill, united in glory!",
-    "🎪 A spectacle of balanced power!",
-    "🌐 The universe maintains its equilibrium!",
-    "⚡ Lightning strikes twice with equal force!"
+    "⚖️ The scales of dominion rest perfectly balanced — a stalemate of kings!",
+    "🤝 Two sovereign powers lock in eternal equilibrium!",
+    "🌓 Neither crown yields — honor is shared between thrones!",
+    "⭐ The royal stars align for both kingdoms equally!",
+    "🎭 A tale written in the chronicles of matched sovereignty!",
+    "🔄 The Wheel of Dominion spins — both kingdoms emerge with honor!",
+    "💠 Matched in royal might, united in majestic glory!",
+    "🏰 Two castles stand unbroken — the realm trembles at their power!",
+    "⚜️ The court declares no victor — both kingdoms reign supreme!",
+    "⚡ Royal thunder clashes — neither bolt strikes harder!",
 ]
 
 SQUAD_MOODS = {
-    "fire": {"emoji": "🔥", "status": "ON FIRE", "desc": "Unstoppable momentum!"},
-    "rising": {"emoji": "📈", "status": "RISING", "desc": "Building strength!"},
-    "steady": {"emoji": "⚖️", "status": "STEADY", "desc": "Maintaining course"},
-    "struggling": {"emoji": "😰", "status": "STRUGGLING", "desc": "Needs regrouping"},
-    "crisis": {"emoji": "💀", "status": "IN CRISIS", "desc": "Dark times ahead..."}
+    "fire": {"emoji": "🔥", "status": "ROYAL INFERNO", "desc": "Unstoppable sovereign power!"},
+    "rising": {"emoji": "📈", "status": "ASCENDING", "desc": "The crown grows heavier with glory!"},
+    "steady": {"emoji": "⚖️", "status": "FORTIFIED", "desc": "The castle walls hold strong"},
+    "struggling": {"emoji": "😰", "status": "BESIEGED", "desc": "The kingdom calls for reinforcements"},
+    "crisis": {"emoji": "💀", "status": "CRUMBLING", "desc": "The throne is under siege..."},
 }
 
 ACHIEVEMENTS = {
@@ -279,7 +281,7 @@ async def add_new_squad(guild, squad_name: str, tag: str, guest_role_name: str =
         squad_role = await guild.create_role(
             name=squad_name,
             mentionable=True,
-            reason=f"Majestic Bot: New kingdom '{squad_name}' created"
+            reason=f"Majestic Dominion: New kingdom '{squad_name}' created"
         )
 
     # Create the guest Discord role
@@ -290,7 +292,7 @@ async def add_new_squad(guild, squad_name: str, tag: str, guest_role_name: str =
             guest_role = await guild.create_role(
                 name=guest_role_name,
                 mentionable=False,
-                reason=f"Majestic Bot: Guest role for '{squad_name}'"
+                reason=f"Majestic Dominion: Guest role for '{squad_name}'"
             )
 
     # Update runtime dicts
@@ -318,7 +320,7 @@ async def remove_existing_squad(guild, squad_name: str, delete_roles: bool = Tru
         role = discord.utils.get(guild.roles, name=squad_name)
         if role:
             try:
-                await role.delete(reason=f"Majestic Bot: Kingdom '{squad_name}' disbanded")
+                await role.delete(reason=f"Majestic Dominion: Kingdom '{squad_name}' disbanded")
             except:
                 pass
 
@@ -328,7 +330,7 @@ async def remove_existing_squad(guild, squad_name: str, delete_roles: bool = Tru
             gr = discord.utils.get(guild.roles, name=grn)
             if gr:
                 try:
-                    await gr.delete(reason=f"Majestic Bot: Guest role for '{squad_name}' removed")
+                    await gr.delete(reason=f"Majestic Dominion: Guest role for '{squad_name}' removed")
                 except:
                     pass
 
@@ -681,21 +683,24 @@ def calculate_power_rating(player_id):
 
 
 RECRUIT_QUOTES = [
-    "⚔️ A new warrior joins the ranks! The enemy trembles!",
-    "🌟 The kingdom grows stronger! Welcome to glory!",
-    "🔥 Fresh blood on the battlefield! Let the conquest begin!",
-    "👑 Another brave soul answers the call to arms!",
-    "💪 The army expands! Victory draws ever closer!",
-    "🦅 A new eagle joins the flock! Soar to greatness!",
-    "⚡ Power surges through the kingdom's veins!",
-    "🎯 A new blade, sharp and ready for battle!",
+    "⚔️ A new knight kneels before the throne — rise, warrior of the Dominion!",
+    "🌟 The royal court welcomes a new champion! May your blade serve the crown!",
+    "🔥 Fresh sovereign blood joins the ranks — the enemy kingdoms tremble!",
+    "👑 By royal decree, a new warrior has sworn their oath to the crown!",
+    "💪 The kingdom's army grows — another soul pledged to majestic glory!",
+    "🦁 A new lion joins the pride — let the hunting grounds know their name!",
+    "⚡ The court herald announces: a new warrior enters the royal guard!",
+    "🗡️ A blade has been drawn in service of the throne — welcome, champion!",
+    "🏰 The castle gates open for a worthy warrior — your legend begins now!",
+    "⚜️ By the seal of Dominion, you are now sworn to this kingdom's banner!",
 ]
 
 GUEST_QUOTES = [
-    "🎭 A noble visitor graces the kingdom with their presence!",
-    "🤝 Alliances strengthen — welcome, honored guest!",
-    "🌐 Diplomacy at its finest! A guest of distinction arrives!",
-    "⭐ The gates open for a worthy traveler!",
+    "🎭 A noble emissary graces the royal court with their presence!",
+    "🤝 The Crown extends its hospitality — welcome, honored dignitary!",
+    "🌐 By diplomatic decree, a guest of distinction enters the throne room!",
+    "⭐ The royal gates open for a worthy traveler from distant lands!",
+    "👑 The court recognizes a visiting noble — may your stay bring honor!",
 ]
 
 
@@ -942,9 +947,9 @@ def generate_realm_news():
             coldest_name, coldest_count = sn, cs["count"]
 
     if hottest_name and hottest_count >= 2:
-        headlines.append(f"🔥 **{SQUADS.get(hottest_name, "?")} {hottest_name}** is ON FIRE with a **{hottest_count}-win streak**! Who can stop them?")
+        headlines.append(f"🔥 **{SQUADS.get(hottest_name, "?")} {hottest_name}** blazes with a ROYAL **{hottest_count}-win streak**! Who dares challenge the throne?")
     if coldest_name and coldest_count >= 3:
-        headlines.append(f"❄️ **{SQUADS.get(coldest_name, "?")} {coldest_name}** struggles through a **{coldest_count}-loss streak**. Can they turn it around?")
+        headlines.append(f"❄️ **{SQUADS.get(coldest_name, "?")} {coldest_name}** endures a dark **{coldest_count}-loss streak**. The court watches with bated breath...")
 
     # 3. Championship leader
     if rankings:
@@ -952,15 +957,15 @@ def generate_realm_news():
         if leader["points"] > 0:
             if len(rankings) > 1:
                 gap = leader["points"] - rankings[1]["points"]
-                headlines.append(f"👑 **{leader['tag']} {leader['name']}** leads the realm with **{leader['points']} pts** ({'+' + str(gap) if gap > 0 else 'TIED'} over #{2})")
+                headlines.append(f"👑 **{leader['tag']} {leader['name']}** rules the Dominion with **{leader['points']} pts** ({'+' + str(gap) if gap > 0 else 'TIED'} over #{2})")
             else:
-                headlines.append(f"👑 **{leader['tag']} {leader['name']}** leads the realm with **{leader['points']} pts**!")
+                headlines.append(f"👑 **{leader['tag']} {leader['name']}** rules the Dominion with **{leader['points']} pts**!")
 
     # 4. Rising kingdom (biggest positive point change potential)
     underdogs = [s for s in rankings if s["total_matches"] >= 3 and s["rank"] > 5 and s["win_rate"] > 55]
     if underdogs:
         rising = random.choice(underdogs)
-        headlines.append(f"📈 **{rising['tag']} {rising['name']}** is a dark horse — ranked #{rising['rank']} but winning **{rising['win_rate']:.0f}%** of their battles!")
+        headlines.append(f"📈 **{rising['tag']} {rising['name']}** is a rising sovereign — ranked #{rising['rank']} but winning **{rising['win_rate']:.0f}%** of their battles!")
 
     # 5. Rivalry alert — find most contested matchup
     matchup_counts = {}
@@ -970,19 +975,19 @@ def generate_realm_news():
     if matchup_counts:
         hottest_pair = max(matchup_counts, key=matchup_counts.get)
         if matchup_counts[hottest_pair] >= 2:
-            headlines.append(f"⚔️ Rivalry Watch: **{SQUADS.get(hottest_pair[0], '?')} {hottest_pair[0]}** vs **{SQUADS.get(hottest_pair[1], '?')} {hottest_pair[1]}** — {matchup_counts[hottest_pair]} clashes recently!")
+            headlines.append(f"⚔️ Royal Rivalry: **{SQUADS.get(hottest_pair[0], '?')} {hottest_pair[0]}** vs **{SQUADS.get(hottest_pair[1], '?')} {hottest_pair[1]}** — {matchup_counts[hottest_pair]} clashes in the royal arena!")
 
     # 6. Random fun fact
     total_matches = len(matches)
     total_players = len([p for p in squad_data["players"].values() if p.get("ingame_name")])
     fun_facts = [
-        f"📊 The realm has witnessed **{total_matches}** battles so far!",
-        f"🗡️ **{total_players}** warriors have registered their profiles!",
-        f"🏰 **{len(SQUADS)}** kingdoms compete for eternal glory!",
+        f"📊 The Dominion has witnessed **{total_matches}** royal battles in the chronicles!",
+        f"🗡️ **{total_players}** warriors have sworn their oath to the Crown!",
+        f"🏰 **{len(SQUADS)}** kingdoms vie for sovereign dominion!",
     ]
     if total_matches > 0:
         total_draws = sum(1 for m in matches if len(set(m["score"].split('-'))) == 1)
-        fun_facts.append(f"🤝 **{total_draws}** battles ended in a draw ({total_draws/total_matches*100:.0f}%)")
+        fun_facts.append(f"🤝 **{total_draws}** battles ended in a royal stalemate ({total_draws/total_matches*100:.0f}%)")
     headlines.append(random.choice(fun_facts))
 
     return headlines
@@ -1319,7 +1324,7 @@ class SquadProfileView(View):
         if report["insights"]:
             embed.add_field(name="💡 Insights", value="\n".join(report["insights"]), inline=False)
 
-        embed.set_footer(text="🧠 Majestic AI — Powered by data, driven by glory!")
+        embed.set_footer(text="🧠 Majestic Dominion | Royal Intelligence Division")
         await interaction.response.send_message(embed=embed, ephemeral=True)
         await log_action(interaction.guild, "🧠 AI Analysis", f"{interaction.user.mention} ran **AI Analysis** on **{self.squad_name}**")
 
@@ -1749,7 +1754,7 @@ def refresh_bounties():
 # =====================================================================
 
 async def announce_match(guild, embed):
-    """Post match result to the public #war-results channel."""
+    """Post match result to the public #『🏆』war-results channel."""
     channel = discord.utils.get(guild.text_channels, name=ANNOUNCE_CHANNEL_NAME)
     if channel:
         try:
@@ -1759,7 +1764,7 @@ async def announce_match(guild, embed):
 
 
 async def announce_challenge(guild, embed, content=None):
-    """Post challenge updates to #war-results channel."""
+    """Post challenge updates to #『🏆』war-results channel."""
     channel = discord.utils.get(guild.text_channels, name=ANNOUNCE_CHANNEL_NAME)
     if channel:
         try:
@@ -1769,7 +1774,7 @@ async def announce_challenge(guild, embed, content=None):
 
 
 async def announce_event(guild, embed, content=None):
-    """Post any live event to #war-results."""
+    """Post any live event to #『🏆』war-results."""
     channel = discord.utils.get(guild.text_channels, name=ANNOUNCE_CHANNEL_NAME)
     if channel:
         try:
@@ -1785,24 +1790,24 @@ async def announce_streak(guild, squad_name, streak_type, streak_count):
     tag = SQUADS.get(squad_name, "?")
     if streak_type == "win":
         if streak_count >= 10:
-            title, desc, color = "🔥🔥🔥 LEGENDARY STREAK!", f"**{tag} {squad_name}** is on a **{streak_count}-WIN STREAK!**\nIs anyone brave enough to stop them?!", ROYAL_GOLD
+            title, desc, color = "🔥🔥🔥 LEGENDARY ROYAL CONQUEST!", f"**{tag} {squad_name}** is on a **{streak_count}-WIN STREAK!**\nIs anyone brave enough to stop them?!", ROYAL_GOLD
         elif streak_count >= 7:
-            title, desc, color = "🔥🔥 DOMINATION!", f"**{tag} {squad_name}** is on a **{streak_count}-WIN STREAK!**\nThey look unstoppable!", ROYAL_GOLD
+            title, desc, color = "🔥🔥 ROYAL DOMINATION!", f"**{tag} {squad_name}** is on a **{streak_count}-WIN STREAK!**\nThey look unstoppable!", ROYAL_GOLD
         elif streak_count >= 5:
-            title, desc, color = "🔥 ON FIRE!", f"**{tag} {squad_name}** is blazing with a **{streak_count}-WIN STREAK!**", ROYAL_RED
+            title, desc, color = "🔥 THE CROWN BLAZES!", f"**{tag} {squad_name}** is blazing with a **{streak_count}-WIN STREAK!**", ROYAL_RED
         else:
             title, desc, color = "🔥 Hot Streak!", f"**{tag} {squad_name}** has won **{streak_count} in a row!**", ROYAL_RED
     elif streak_type == "loss":
         if streak_count >= 7:
-            title, desc, color = "💀 CRISIS MODE!", f"**{tag} {squad_name}** has lost **{streak_count} straight!**\nDark times in the kingdom...", 0x2c2c2c
+            title, desc, color = "💀 THE THRONE CRUMBLES!", f"**{tag} {squad_name}** has lost **{streak_count} straight!**\nDark times in the kingdom...", 0x2c2c2c
         elif streak_count >= 5:
-            title, desc, color = "❄️ Cold Streak!", f"**{tag} {squad_name}** has lost **{streak_count} in a row...**\nCan they turn it around?", 0x4a4a4a
+            title, desc, color = "❄️ Cold Streak!", f"**{tag} {squad_name}** has lost **{streak_count} in a row...**\nThe court watches with bated breath...", 0x4a4a4a
         else:
             title, desc, color = "❄️ Struggling", f"**{tag} {squad_name}** has dropped **{streak_count} straight.**", 0x666666
     else:
         return
     embed = discord.Embed(title=title, description=desc, color=color)
-    embed.set_footer(text="⚜️ Streak Alert")
+    embed.set_footer(text="⚜️ Majestic Dominion | Streak Alert")
     await announce_event(guild, embed)
 
 
@@ -1815,13 +1820,13 @@ async def announce_rank_change(guild, squad_name, old_rank, new_rank):
         # Moved UP
         if new_rank <= 3:
             embed = discord.Embed(
-                title="📈 TOP 3 ALERT!",
+                title="📈 ROYAL COURT ASCENSION!",
                 description=f"**{tag} {squad_name}** climbed to **#{new_rank}** (was #{old_rank})!",
                 color=ROYAL_GOLD
             )
         elif new_rank == 1:
             embed = discord.Embed(
-                title="👑 NEW #1!",
+                title="👑 A NEW SOVEREIGN CLAIMS THE THRONE!",
                 description=f"**{tag} {squad_name}** has taken the **THRONE!** (was #{old_rank})",
                 color=ROYAL_GOLD
             )
@@ -1835,7 +1840,7 @@ async def announce_rank_change(guild, squad_name, old_rank, new_rank):
         # Moved DOWN
         if old_rank <= 3 and new_rank > 3:
             embed = discord.Embed(
-                title="📉 Dethroned!",
+                title="📉 ROYAL DETHRONEMENT!",
                 description=f"**{tag} {squad_name}** dropped out of the Top 3! **#{old_rank}** → **#{new_rank}**",
                 color=ROYAL_RED
             )
@@ -1848,25 +1853,27 @@ async def announce_rank_change(guild, squad_name, old_rank, new_rank):
                 description=f"**{tag} {squad_name}** dropped from **#{old_rank}** → **#{new_rank}**",
                 color=0x666666
             )
-    embed.set_footer(text="⚜️ Rank Update")
+    embed.set_footer(text="⚜️ Majestic Dominion | Rank Update")
     await announce_event(guild, embed)
 
 
 DAILY_QUOTES = [
-    "⚔️ *The battlefield awaits. Who will answer the call today?*",
-    "👑 *Legends aren't born — they're forged in the fires of competition.*",
-    "🏰 *Every kingdom's story is written one battle at a time.*",
-    "🔥 *Today's underdog could be tomorrow's champion.*",
-    "⚡ *Glory doesn't wait. Challenge a kingdom and make your mark.*",
-    "🗡️ *The realm is restless. Steel your resolve, warriors.*",
-    "🌅 *A new day dawns on the battlefield. Fight with honor.*",
-    "💀 *Defeat is just a detour on the road to glory.*",
-    "🏆 *The throne is never truly secure. Will you defend it?*",
-    "🎯 *Check the bounty board — someone's glory is waiting to be claimed.*",
-    "📊 *The rankings shift with every battle. Where does your kingdom stand?*",
-    "🤝 *True rivals make each other stronger. Challenge one today.*",
-    "⚖️ *Balance is an illusion. Only the bold seize glory.*",
-    "🦅 *Eagles don't flock. Lead your kingdom to victory.*",
+    "⚔️ *The royal arena awaits. Which sovereign will answer the Crown's call today?*",
+    "👑 *Legends are not born of noble blood — they are forged in the fires of the Dominion.*",
+    "🏰 *Every kingdom's destiny is written one battle at a time in the royal chronicles.*",
+    "🔥 *Today's vassal could be tomorrow's sovereign. Seize your throne.*",
+    "⚡ *Glory waits for no king. Issue a challenge and carve your name into history.*",
+    "🗡️ *The Dominion grows restless. Sharpen your steel, warriors of the Crown.*",
+    "🌅 *Dawn breaks over the royal battlegrounds. Fight with honor, reign with pride.*",
+    "💀 *Defeat is but a trial set by the Crown. Rise stronger, rule harder.*",
+    "🏆 *The throne is never secure. Defend your glory or watch it crumble.*",
+    "🎯 *The Royal Bounty Board beckons — a king's ransom awaits the bold.*",
+    "📊 *The rankings shift with every clash of steel. Where does your kingdom stand?*",
+    "🤝 *True rivals forge each other into diamonds. Challenge one and become legend.*",
+    "⚜️ *The Majestic Dominion remembers all who fight — will you be remembered as champion or challenger?*",
+    "🦁 *Lions do not concern themselves with the opinions of sheep. Prove your sovereignty.*",
+    "🔱 *By the Trident of Dominion — let the wars of kings begin.*",
+    "👑 *Every crown was won, never given. Take yours on the battlefield.*",
 ]
 
 
@@ -1886,7 +1893,7 @@ async def daily_pulse_task():
         quote = random.choice(DAILY_QUOTES)
 
         embed = discord.Embed(
-            title="⚜️ DAILY REALM PULSE",
+            title="⚜️ DAILY ROYAL DECREE",
             description=quote,
             color=ROYAL_PURPLE
         )
@@ -2069,11 +2076,11 @@ class ChallengeMessageModal(Modal, title="⚔️ War Declaration"):
             embed.add_field(name="📜 War Declaration", value=f"*\"{msg}\"*", inline=False)
         await interaction.response.edit_message(embed=embed, view=None)
 
-        # Public announcement in #war-results
+        # Public announcement in #『🏆』war-results
         pub_embed = discord.Embed(
-            title="⚔️ WAR CHALLENGE ISSUED!",
+            title="⚔️ ROYAL DECLARATION OF WAR!",
             description=(
-                f"**{SQUADS.get(self.challenger, '?')} {self.challenger}** has thrown down the gauntlet!\n\n"
+                f"**{SQUADS.get(self.challenger, '?')} {self.challenger}** has issued a Royal Declaration of War!\n\n"
                 f"🎯 Target: **{SQUADS.get(self.challenged, '?')} {self.challenged}**\n"
                 f"⏳ Status: **PENDING RESPONSE**"
             ),
@@ -2087,7 +2094,7 @@ class ChallengeMessageModal(Modal, title="⚔️ War Declaration"):
         challenged_role = discord.utils.get(interaction.guild.roles, name=self.challenged)
         mention_text = challenged_role.mention if challenged_role else f"**{self.challenged}**"
 
-        # Send to #war-results with response buttons
+        # Send to #『🏆』war-results with response buttons
         announce_ch = discord.utils.get(interaction.guild.text_channels, name=ANNOUNCE_CHANNEL_NAME)
         if announce_ch:
             try:
@@ -2105,7 +2112,7 @@ class ChallengeMessageModal(Modal, title="⚔️ War Declaration"):
 
 
 class ChallengeResponseView(View):
-    """Accept/Decline buttons shown in #war-results for opponent leaders."""
+    """Accept/Decline buttons shown in #『🏆』war-results for opponent leaders."""
     def __init__(self, challenge_id, challenger, challenged):
         super().__init__(timeout=None)  # Persistent — no timeout
         self.challenge_id = challenge_id
@@ -2136,7 +2143,7 @@ class ChallengeResponseView(View):
         save_data(squad_data)
 
         embed = discord.Embed(
-            title="⚔️ CHALLENGE ACCEPTED!",
+            title="⚔️ THE CHALLENGE IS ANSWERED!",
             description=(
                 f"**{SQUADS.get(self.challenged, '?')} {self.challenged}** accepts the challenge from "
                 f"**{SQUADS.get(self.challenger, '?')} {self.challenger}**!\n\n"
@@ -2192,8 +2199,8 @@ def build_bounty_embed():
     """Build the bounty board embed."""
     bounties = squad_data.get("bounties", {})
     embed = discord.Embed(
-        title="💰 Bounty Board",
-        description="*Defeat these kingdoms to earn bonus Glory Points!*\n\nBounties are auto-placed on the top 3 ranked kingdoms. Claim them by winning!",
+        title="💰 Royal Bounty Board",
+        description="*By royal decree, these kingdoms carry a price on their crown!*\n\nThe top 3 kingdoms always bear the Crown's bounty. Defeat them to claim your reward!",
         color=ROYAL_GOLD
     )
     if not bounties:
@@ -2208,7 +2215,7 @@ def build_bounty_embed():
                 value=f"📊 Rank: **{rank_text}** | {info['reason']}\n💰 Beat them to claim **+{info['points']}** bonus Glory Points!",
                 inline=False
             )
-    embed.set_footer(text="⚜️ Bounties refresh after each match | Top 3 always have bounties")
+    embed.set_footer(text="⚜️ Majestic Dominion | Royal bounties refresh after each battle")
     return embed
 
 
@@ -2550,13 +2557,13 @@ class ScheduleDateModal(Modal, title="📅 Schedule Match Date"):
         embed.set_footer(text=f"Challenge ID: {self.challenge_id}")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-        # Public announcement in #war-results
+        # Public announcement in #『🏆』war-results
         pub_embed = discord.Embed(
-            title="📅 MATCH SCHEDULED!",
+            title="📅 ROYAL BATTLE DECREE!",
             description=(
                 f"**{tag1} {challenge['challenger']}** vs **{tag2} {challenge['challenged']}**\n\n"
                 f"🗓️ **{date_str}**\n\n"
-                f"*The battlefield has been chosen. Prepare for war!*"
+                f"*By order of the Crown — the royal arena has been prepared!*"
             ),
             color=ROYAL_GREEN
         )
@@ -2670,7 +2677,7 @@ async def weekly_digest_task():
                 pass
 
         embed = discord.Embed(
-            title="📰 WEEKLY REALM DIGEST",
+            title="📰 WEEKLY ROYAL CHRONICLE",
             description=f"*Week of {now.strftime('%B %d, %Y')}*\n⚔️ **{len(week_matches)}** battles fought this week!",
             color=ROYAL_GOLD
         )
@@ -2729,7 +2736,7 @@ async def weekly_digest_task():
                 b_text += f"💰 **{SQUADS.get(name, '?')} {name}** — +{info['points']} pts bounty\n"
             embed.add_field(name="💰 Active Bounties", value=b_text, inline=False)
 
-        embed.set_footer(text="⚜️ Majestic Weekly Digest | Published every Sunday")
+        embed.set_footer(text="⚜️ Majestic Dominion | Royal Chronicle | Published every Sunday")
 
         try:
             await channel.send(embed=embed)
@@ -2996,7 +3003,7 @@ class MemberPanelView(View):
     async def rankings_btn(self, interaction: discord.Interaction, button: Button):
         rankings = get_squad_ranking()
         tp = (len(rankings) + 14) // 15
-        embed = discord.Embed(title="🏆 Leaderboard", description=f"Page 1/{tp}", color=ROYAL_GOLD)
+        embed = discord.Embed(title="👑 The Royal Leaderboard", description=f"Page 1/{tp}", color=ROYAL_GOLD)
         for s in rankings[:15]:
             i = s["rank"]
             medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"**{i}.**"
@@ -3030,7 +3037,7 @@ class MemberPanelView(View):
         role, _ = get_member_squad(interaction.user, interaction.guild)
         sn = role.name if role else "Free Agent"
         view = RoleSelectView(interaction.user.id, sn)
-        embed = discord.Embed(title="⚙️ Profile Setup", description="Choose your battle position first:", color=ROYAL_PURPLE)
+        embed = discord.Embed(title="⚙️ Royal Registration", description="*Declare your position before the Crown, warrior:*", color=ROYAL_PURPLE)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
         await log_action(interaction.guild, "⚙️ Setup", f"{interaction.user.mention} started **Profile Setup**")
 
@@ -3042,8 +3049,8 @@ class MemberPanelView(View):
     @discord.ui.button(label="War Oracle", style=discord.ButtonStyle.primary, emoji="🔮", row=2)
     async def oracle_btn(self, interaction: discord.Interaction, button: Button):
         embed = discord.Embed(
-            title="🔮 War Oracle — Match Predictor",
-            description="The Oracle will analyze two kingdoms and predict the outcome!\n\nSelect the **first** kingdom:",
+            title="🔮 The Royal Oracle — Prophecy of War",
+            description="*The Royal Oracle peers into the mists of fate...*\n\nSelect the **first** kingdom:",
             color=ROYAL_PURPLE
         )
         await interaction.response.send_message(embed=embed, view=MatchPredictorStep1View(), ephemeral=True)
@@ -3053,8 +3060,8 @@ class MemberPanelView(View):
     async def news_btn(self, interaction: discord.Interaction, button: Button):
         headlines = generate_realm_news()
         embed = discord.Embed(
-            title="📰 Majestic Realm News",
-            description="*The latest from the chronicles of war!*",
+            title="📰 Royal Court Gazette",
+            description="*Official dispatches from the Royal Court of Majestic Dominion*",
             color=ROYAL_GOLD
         )
         for i, headline in enumerate(headlines[:6]):
@@ -3159,7 +3166,7 @@ class RankingsView(View):
         tp = (len(rankings) + 14) // 15
         start = (page - 1) * 15
         ps = rankings[start:start+15]
-        embed = discord.Embed(title="🏆 Leaderboard", description=f"Page {page}/{tp}", color=ROYAL_GOLD)
+        embed = discord.Embed(title="👑 The Royal Leaderboard", description=f"Page {page}/{tp}", color=ROYAL_GOLD)
         for s in ps:
             i = s["rank"]
             medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"**{i}.**"
@@ -3439,7 +3446,7 @@ class RecordBattleScoreModal(Modal, title="⚔️ Enter Battle Score"):
         team2_data["match_history"].append(match_data)
         save_data(squad_data)
 
-        embed = discord.Embed(title="📜 Battle Chronicles Updated", description=f"{result_text}\n\n*{flavor_quote}*", color=ROYAL_GOLD)
+        embed = discord.Embed(title="📜 The Royal Chronicles Are Written", description=f"{result_text}\n\n*{flavor_quote}*", color=ROYAL_GOLD)
         embed.add_field(name="🆔 Match ID", value=f"`{match_id}`", inline=False)
         embed.add_field(name="⚔️ Score", value=f"**{self.result.value}**", inline=True)
 
@@ -3484,9 +3491,9 @@ class RecordBattleScoreModal(Modal, title="⚔️ Enter Battle Score"):
         await log_action(interaction.guild, "📜 Battle Recorded",
             f"{interaction.user.mention} recorded: {self.team1_name} vs {self.team2_name} ({self.result.value}) | ID: {match_id}")
 
-        # --- Public announcement in #war-results ---
+        # --- Public announcement in #『🏆』war-results ---
         pub_embed = discord.Embed(
-            title="⚔️ BATTLE RESULT",
+            title="⚔️ ROYAL WAR REPORT",
             description=f"{result_text}\n\n*{flavor_quote}*",
             color=ROYAL_GOLD if actual_winner != "draw" else ROYAL_BLUE
         )
@@ -3523,11 +3530,11 @@ class RecordBattleScoreModal(Modal, title="⚔️ Enter Battle Score"):
                 all_new_achievements.append(f"{a['name']} — **{SQUADS.get(self.team2_name, '?')} {self.team2_name}**")
         if all_new_achievements:
             ach_embed = discord.Embed(
-                title="🏅 ACHIEVEMENT UNLOCKED!",
+                title="🏅 ROYAL HONOUR BESTOWED!",
                 description="\n".join(all_new_achievements),
                 color=ROYAL_GOLD
             )
-            ach_embed.set_footer(text="⚜️ New milestones reached!")
+            ach_embed.set_footer(text="⚜️ Majestic Dominion | New honours earned")
             await announce_event(interaction.guild, ach_embed)
 
 
@@ -3587,14 +3594,14 @@ class AwardTitleDetailsModal(Modal, title="🏆 Award Championship Title"):
 
         # Public announcement
         pub = discord.Embed(
-            title="🏆 ROYAL TITLE BESTOWED!",
+            title="🏆 THE CROWN BESTOWS A ROYAL TITLE!",
             description=f"{pe} **{SQUADS.get(self.squad_name, '?')} {self.squad_name}** has earned:\n\n**{full_title}**",
             color=ROYAL_GOLD
         )
         if self.position.value.lower() in ["1st", "first", "1"]:
             pub.add_field(name="👑 Championship!", value=f"Total Championships: **{squad_info['championship_wins']}**", inline=False)
-            pub.description += "\n\n🎉 *All hail the champions!*"
-        pub.set_footer(text="⚜️ Glory to the victors!")
+            pub.description += "\n\n🎉 *All hail the champions of the Dominion!*"
+        pub.set_footer(text="⚜️ Majestic Dominion | Glory to the victors!")
         await announce_event(interaction.guild, pub)
 
 
@@ -3717,15 +3724,15 @@ class AddSquadModal(Modal, title="🏰 Create New Kingdom"):
                 value="• Assign the kingdom role to members\n• Leaders can use `/leader` to manage\n• The kingdom appears in all dropdowns now!",
                 inline=False
             )
-            embed.set_footer(text="⚜️ A new chapter begins in the realm chronicles!")
+            embed.set_footer(text="⚜️ Majestic Dominion | A new chapter is written in the royal chronicles!")
             await interaction.followup.send(embed=embed, ephemeral=True)
             await log_action(interaction.guild, "🏰 Kingdom Founded",
                 f"{interaction.user.mention} created **{tag} {name}**" + (f" with guest role `{grn}`" if grn else ""))
 
             # Public announcement
             pub = discord.Embed(
-                title="🏰 A NEW KINGDOM RISES!",
-                description=f"**{tag} {name}** has been founded!\n\n*A new power enters the realm. Will they conquer or crumble?*",
+                title="🏰 A NEW SOVEREIGN POWER RISES!",
+                description=f"**{tag} {name}** has been founded!\n\n*A new banner unfurls in the Majestic Dominion. Will they conquer or crumble?*",
                 color=ROYAL_GREEN
             )
             pub.set_footer(text=f"Founded by {interaction.user.display_name} | ⚜️ The realm grows!")
@@ -3831,11 +3838,11 @@ class RemoveConfirmView(View):
             await log_action(interaction.guild, "💀 Kingdom Disbanded",
                 f"{interaction.user.mention} disbanded **{self.squad_name}** (roles deleted, {self.member_count} members affected)")
             pub = discord.Embed(
-                title="💀 A KINGDOM HAS FALLEN!",
+                title="💀 A SOVEREIGN POWER HAS FALLEN!",
                 description=f"**{self.squad_name}** has been disbanded.\n*{self.member_count} warriors left without a banner...*",
                 color=ROYAL_RED
             )
-            pub.set_footer(text="⚜️ The realm remembers.")
+            pub.set_footer(text="⚜️ Majestic Dominion | The Crown remembers.")
             await announce_event(interaction.guild, pub)
         except Exception as e:
             await interaction.response.edit_message(content=f"❌ Error: {e}", embed=None, view=None)
@@ -3855,11 +3862,11 @@ class RemoveConfirmView(View):
             await log_action(interaction.guild, "📋 Kingdom Removed",
                 f"{interaction.user.mention} removed **{self.squad_name}** from bot (roles kept)")
             pub = discord.Embed(
-                title="💀 A KINGDOM HAS FALLEN!",
+                title="💀 A SOVEREIGN POWER HAS FALLEN!",
                 description=f"**{self.squad_name}** has been disbanded.\n*Their legacy fades from the chronicles...*",
                 color=ROYAL_RED
             )
-            pub.set_footer(text="⚜️ The realm remembers.")
+            pub.set_footer(text="⚜️ Majestic Dominion | The Crown remembers.")
             await announce_event(interaction.guild, pub)
         except Exception as e:
             await interaction.response.edit_message(content=f"❌ Error: {e}", embed=None, view=None)
@@ -4009,7 +4016,7 @@ class EditSquadModal(Modal, title="✏️ Edit Kingdom"):
                 role = discord.utils.get(guild.roles, name=old)
                 if role:
                     try:
-                        await role.edit(name=new_name, reason=f"Majestic Bot: Renamed '{old}' → '{new_name}'")
+                        await role.edit(name=new_name, reason=f"Majestic Dominion: Renamed '{old}' → '{new_name}'")
                     except:
                         pass
 
@@ -4061,7 +4068,7 @@ class EditSquadModal(Modal, title="✏️ Edit Kingdom"):
                         old_gr = discord.utils.get(guild.roles, name=old_grn)
                         if old_gr and new_guest != old_grn:
                             try:
-                                await old_gr.edit(name=new_guest, reason=f"Majestic Bot: Guest role renamed for '{actual_name}'")
+                                await old_gr.edit(name=new_guest, reason=f"Majestic Dominion: Guest role renamed for '{actual_name}'")
                             except:
                                 pass
                     else:
@@ -4070,7 +4077,7 @@ class EditSquadModal(Modal, title="✏️ Edit Kingdom"):
                             await guild.create_role(
                                 name=new_guest,
                                 mentionable=False,
-                                reason=f"Majestic Bot: Guest role for '{actual_name}'"
+                                reason=f"Majestic Dominion: Guest role for '{actual_name}'"
                             )
                         except:
                             pass
@@ -4094,7 +4101,7 @@ class EditSquadModal(Modal, title="✏️ Edit Kingdom"):
                 color=ROYAL_GREEN
             )
             embed.add_field(name="📝 Changes Applied", value="\n".join(changes), inline=False)
-            embed.set_footer(text="⚜️ The realm chronicles have been updated!")
+            embed.set_footer(text="⚜️ Majestic Dominion | The royal chronicles have been rewritten!")
             await interaction.followup.send(embed=embed, ephemeral=True)
             await log_action(guild, "✏️ Kingdom Edited",
                 f"{interaction.user.mention} edited **{actual_name}**: " + ", ".join(changes))
@@ -4102,8 +4109,8 @@ class EditSquadModal(Modal, title="✏️ Edit Kingdom"):
             # Announce name changes publicly
             if name_changed:
                 pub = discord.Embed(
-                    title="✏️ KINGDOM REBORN!",
-                    description=f"**{self.old_name}** is now known as **{SQUADS.get(actual_name, '?')} {actual_name}**!\n\n*A new era begins under a new banner.*",
+                    title="✏️ A KINGDOM IS REBORN!",
+                    description=f"**{self.old_name}** is now known as **{SQUADS.get(actual_name, '?')} {actual_name}**!\n\n*The royal scribes rewrite the chronicles — a new chapter begins.*",
                     color=ROYAL_PURPLE
                 )
                 pub.set_footer(text="⚜️ The chronicles have been rewritten.")
@@ -4170,7 +4177,7 @@ class ModeratorPanelView(View):
     @discord.ui.button(label="War Oracle", style=discord.ButtonStyle.primary, emoji="🔮", row=2)
     async def oracle_btn(self, interaction: discord.Interaction, button: Button):
         embed = discord.Embed(
-            title="🔮 War Oracle — Pre-Battle Analysis",
+            title="🔮 The Royal Oracle — Pre-Battle Prophecy",
             description="Predict the outcome before recording!\n\nSelect the **first** kingdom:",
             color=ROYAL_PURPLE
         )
@@ -4250,7 +4257,7 @@ async def show_recent_matches(interaction, limit=10):
     if not recent:
         await interaction.response.send_message("📜 No matches recorded yet.", ephemeral=True)
         return
-    embed = discord.Embed(title="📜 Recent Battles", description=f"Last {len(recent)} matches", color=ROYAL_PURPLE)
+    embed = discord.Embed(title="📜 Recent Royal Decrees of War", description=f"Last {len(recent)} matches", color=ROYAL_PURPLE)
     for m in recent:
         mid, t1, t2, score = m.get("match_id", "?"), m["team1"], m["team2"], m["score"]
         try:
@@ -4318,14 +4325,14 @@ class HelpView(View):
     async def cat_selected(self, interaction):
         cat = interaction.data["values"][0]
         if cat == "member":
-            embed = discord.Embed(title="👥 Majestic Member", description="Everything accessible from `/member`", color=ROYAL_BLUE)
+            embed = discord.Embed(title="👥 Majestic Member", description="*All powers granted to citizens of the Dominion via `/member`*", color=ROYAL_BLUE)
             embed.add_field(name="🏰 Browse Kingdoms", value="Explore any kingdom's profile, roster, and match history", inline=False)
             embed.add_field(name="🏆 Rankings", value="View the full leaderboard with points and win rates", inline=False)
             embed.add_field(name="👤 View Profile", value="Search any warrior by name and view their full profile with power rating", inline=False)
             embed.add_field(name="🛡️ My Kingdom", value="View your own kingdom's detailed profile", inline=False)
-            embed.add_field(name="⚜️ My Profile", value="See your warrior profile and stats", inline=False)
-            embed.add_field(name="⚙️ Setup Profile", value="Create or update your IGN, ID, rank, and role", inline=False)
-            embed.add_field(name="🎲 Fun Stats", value="Interesting realm-wide statistics and trivia", inline=False)
+            embed.add_field(name="⚜️ My Profile", value="View your royal warrior scroll", inline=False)
+            embed.add_field(name="⚙️ Setup Profile", value="Register your identity with the Crown", inline=False)
+            embed.add_field(name="🎲 Fun Stats", value="Royal court curiosities and realm trivia", inline=False)
             embed.add_field(name="🔮 War Oracle", value="AI-powered match predictor — see win probabilities before battles!", inline=False)
             embed.add_field(name="📰 Realm News", value="Auto-generated news bulletin with latest headlines", inline=False)
             embed.add_field(name="💰 Bounties", value="View the Bounty Board — beat top-ranked kingdoms for bonus Glory Points!", inline=False)
@@ -4333,7 +4340,7 @@ class HelpView(View):
             embed.add_field(name="🚪 Leave Kingdom", value="Leave your current kingdom (profile preserved)", inline=False)
             embed.add_field(name="\n📌 Profile Viewing", value="Use `/profile @user` or the **View Profile** button (smart search) to view anyone's profile!", inline=False)
         elif cat == "leader":
-            embed = discord.Embed(title="👑 Majestic Leader", description="Everything accessible from `/leader`", color=ROYAL_GOLD)
+            embed = discord.Embed(title="👑 Sovereign Commander's Guide", description="*All sovereign powers granted to kingdom leaders via `/leader`*", color=ROYAL_GOLD)
             embed.add_field(name="➕ Add Member", value="Search by name to recruit warriors", inline=True)
             embed.add_field(name="➖ Remove Member", value="Select from dropdown to dismiss", inline=True)
             embed.add_field(name="⭐ Set Main (5 max)", value="Select from dropdown for main roster", inline=True)
@@ -4345,7 +4352,7 @@ class HelpView(View):
             embed.add_field(name="⚔️ Challenge", value="Challenge another kingdom to war!", inline=True)
             embed.add_field(name="🏰 View Kingdom", value="See your kingdom's full profile", inline=True)
         elif cat == "moderator":
-            embed = discord.Embed(title="🛡️ Majestic Moderator", description="Everything accessible from `/mod`", color=ROYAL_PURPLE)
+            embed = discord.Embed(title="🛡️ Royal Council Guide", description="*All council powers granted to moderators via `/mod`*", color=ROYAL_PURPLE)
             embed.add_field(name="⚔️ Record Battle", value="Select both kingdoms from dropdowns, then enter the score", inline=False)
             embed.add_field(name="🏆 Award Title", value="Select a kingdom from dropdown, then enter title details", inline=False)
             embed.add_field(name="🗑️ Delete Match", value="Select a match from recent matches dropdown to delete", inline=False)
@@ -4358,15 +4365,15 @@ class HelpView(View):
             embed.add_field(name="💀 Remove Kingdom", value="Disband a kingdom — optionally delete Discord roles too", inline=False)
             embed.add_field(name="💰 Bounties", value="Add, remove, or clear all bounties — full bounty manager", inline=False)
             embed.add_field(name="🎯 Challenges", value="Schedule matches, cancel challenges, clear old ones — full challenge manager", inline=False)
-            embed.add_field(name="📋 /profiles", value="View all completed and incomplete warrior profiles with counts", inline=False)
+            embed.add_field(name="📋 /profiles", value="Royal Census — view all registered warriors by kingdom", inline=False)
         else:  # help
-            embed = discord.Embed(title="📜 Majestic Help", description="Quick guide to all commands", color=ROYAL_PURPLE)
+            embed = discord.Embed(title="📜 Royal Codex of the Dominion", description="Quick guide to all commands", color=ROYAL_PURPLE)
             embed.add_field(name="🎯 Slash Commands", value=(
                 "`/member` — Member panel (browse, rankings, profile, etc.)\n"
                 "`/leader` — Leader panel (manage roster & kingdom)\n"
                 "`/mod` — Moderator panel (matches & titles)\n"
                 "`/profile @user` — View anyone's profile\n"
-                "`/profiles` — View all completed profiles (mod only)\n"
+                "`/profiles` — Royal Census of registered warriors (council only)\n"
                 "`/restore` — Restore data from backup (mod only)\n"
                 "`/help` — This help menu"
             ), inline=False)
@@ -4388,11 +4395,11 @@ class HelpView(View):
             ), inline=False)
             embed.add_field(name="⚔️ Challenges & Bounties", value=(
                 "• Leaders can **challenge** other kingdoms from `/leader`\n"
-                "• Challenges are announced in **#war-results**\n"
+                "• Challenges are announced in **#『🏆』war-results**\n"
                 "• Top 3 kingdoms always have **auto-bounties**\n"
                 "• Mods can **manage bounties** (add/remove/clear) from `/mod`\n"
             ), inline=False)
-            embed.add_field(name="📢 #war-results (Live Feed)", value=(
+            embed.add_field(name="📢 #『🏆』war-results (Live Feed)", value=(
                 "• ⚔️ Match results with Glory Points\n"
                 "• 🔥 Streak alerts (3, 5, 7, 10+)\n"
                 "• 📈📉 Rank changes & Top 3 movements\n"
@@ -4412,7 +4419,7 @@ class HelpView(View):
                 "• Everything is button & modal-based — minimal typing needed!"
             ), inline=False)
 
-        embed.set_footer(text="⚜️ Majestic Bot — May glory guide your path!")
+        embed.set_footer(text="⚜️ Majestic Dominion | May the Crown guide your path")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
@@ -4420,7 +4427,7 @@ class HelpView(View):
 #                     SLASH COMMANDS (Clean & Minimal)
 # =====================================================================
 
-@bot.tree.command(name="member", description="⚜️ Open the Majestic Member panel")
+@bot.tree.command(name="member", description="⚜️ Enter the Royal Court of the Dominion")
 async def member_command(interaction: discord.Interaction):
     view = MemberPanelView()
     ur, ut = get_member_squad(interaction.user, interaction.guild)
@@ -4431,8 +4438,8 @@ async def member_command(interaction: discord.Interaction):
     tm = len(squad_data["matches"])
 
     embed = discord.Embed(
-        title="⚜️ Majestic Member Hall",
-        description=f"Welcome, **{interaction.user.display_name}**!{sq_text}",
+        title="⚜️ The Royal Court of Majestic Dominion",
+        description=f"*Hail,* **{interaction.user.display_name}**! *Welcome to the Royal Court.*{sq_text}",
         color=ROYAL_BLUE
     )
     embed.add_field(name="🌟 Realm", value=(
@@ -4446,12 +4453,12 @@ async def member_command(interaction: discord.Interaction):
         embed.add_field(name="💪 Your Power", value=f"{rank_info[1]} — **{power}/100**", inline=False)
 
     embed.set_thumbnail(url=interaction.user.display_avatar.url)
-    embed.set_footer(text="⚜️ Powered by Majestic AI • Use the buttons below!")
+    embed.set_footer(text="⚜️ Majestic Dominion | Long live the Crown")
     await interaction.response.send_message(embed=embed, view=view)
     await log_action(interaction.guild, "📋 /member", f"{interaction.user.mention} opened **Member Panel**")
 
 
-@bot.tree.command(name="leader", description="👑 Open the Majestic Leader panel")
+@bot.tree.command(name="leader", description="👑 Open your Sovereign Command Chamber")
 async def leader_command(interaction: discord.Interaction):
     if not is_leader(interaction.user):
         await interaction.response.send_message("❌ Only **Leaders** can access this.", ephemeral=True)
@@ -4469,8 +4476,8 @@ async def leader_command(interaction: discord.Interaction):
     sub_count = len(si.get("subs", []))
 
     embed = discord.Embed(
-        title=f"👑 {sr.name} — Leader Chamber",
-        description=f"Manage your kingdom, **{interaction.user.display_name}**!",
+        title=f"👑 {sr.name} — Sovereign Command",
+        description=f"*Your Royal Highness,* **{interaction.user.display_name}** — *the throne awaits your command.*",
         color=sr.color if sr.color != discord.Color.default() else ROYAL_GOLD
     )
     embed.add_field(name="📊 Quick Status", value=f"👥 {len(sr.members)} members • ⭐ {mr_count}/5 mains • 🔄 {sub_count}/3 subs", inline=False)
@@ -4492,20 +4499,20 @@ async def leader_command(interaction: discord.Interaction):
     if bounty:
         embed.add_field(name="💰 Bounty Alert!", value=f"**+{bounty['points']}** Glory Points bounty on your kingdom!", inline=False)
 
-    embed.set_footer(text="⚜️ Lead with honor! | All actions via buttons below")
+    embed.set_footer(text="⚜️ Majestic Dominion | Lead with honor, reign with glory")
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
     await log_action(interaction.guild, "📋 /leader", f"{interaction.user.mention} opened **Leader Panel** for **{sr.name}**")
 
 
-@bot.tree.command(name="mod", description="🛡️ Open the Moderator panel")
+@bot.tree.command(name="mod", description="🛡️ Enter the Royal Council Chamber")
 async def mod_command(interaction: discord.Interaction):
     if not is_moderator(interaction.user):
         await interaction.response.send_message("❌ Only **Moderators** can access this.", ephemeral=True)
         return
     view = ModeratorPanelView()
     embed = discord.Embed(
-        title="🛡️ Moderator Chamber",
-        description="Manage tournaments, matches, and records.",
+        title="🛡️ Royal Council Chamber",
+        description="*The Royal Council Chamber — govern the Dominion with wisdom and authority.*",
         color=ROYAL_PURPLE
     )
     embed.add_field(name="📊 Stats", value=(
@@ -4513,30 +4520,28 @@ async def mod_command(interaction: discord.Interaction):
         f"🎯 {len([c for c in squad_data.get('challenges', []) if c['status'] in ('pending', 'accepted')])} active challenges • "
         f"💰 {len(squad_data.get('bounties', {}))} bounties"
     ), inline=False)
-    embed.set_footer(text="⚜️ Govern with fairness!")
+    embed.set_footer(text="⚜️ Majestic Dominion | The Council sees all")
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
     await log_action(interaction.guild, "📋 /mod", f"{interaction.user.mention} opened **Moderator Panel**")
 
 
-@bot.tree.command(name="profile", description="⚜️ View a warrior's profile")
+@bot.tree.command(name="profile", description="⚜️ Inspect a warrior's royal scroll")
 @app_commands.describe(member="Tag the warrior to view")
 async def profile_command(interaction: discord.Interaction, member: discord.Member):
     await show_player_profile(interaction, member, public=True)
     await log_action(interaction.guild, "👤 /profile", f"{interaction.user.mention} viewed profile of {member.mention}")
 
 
-@bot.tree.command(name="profiles", description="📋 View all completed warrior profiles (Moderator only)")
+@bot.tree.command(name="profiles", description="📜 Royal Census — view all registered warriors")
 async def profiles_command(interaction: discord.Interaction):
     if not is_moderator(interaction.user):
-        await interaction.response.send_message("❌ Only **Moderators** can use this command.", ephemeral=True)
+        await interaction.response.send_message("❌ Only the **Royal Council** may access the census.", ephemeral=True)
         return
 
     await interaction.response.defer(ephemeral=True)
 
     guild = interaction.guild
     completed = []
-    incomplete = []
-    no_profile = 0
 
     for pk, pd in squad_data["players"].items():
         ign = pd.get("ingame_name", "")
@@ -4545,107 +4550,82 @@ async def profiles_command(interaction: discord.Interaction):
         role = pd.get("role", "")
         squad = pd.get("squad", "")
 
+        if not (ign and gid and rank and role):
+            continue
+
         member = guild.get_member(int(pk)) if pk.isdigit() else None
-        name = member.display_name if member else f"User#{pk}"
         mention = member.mention if member else f"`{pk}`"
+        completed.append({
+            "mention": mention, "ign": ign, "id": gid,
+            "rank": rank, "role": role, "squad": squad
+        })
 
-        if ign and gid and rank and role:
-            completed.append({
-                "name": name, "mention": mention, "ign": ign, "id": gid,
-                "rank": rank, "role": role, "squad": squad
-            })
-        else:
-            missing = []
-            if not ign: missing.append("IGN")
-            if not gid: missing.append("Game ID")
-            if not rank: missing.append("Rank")
-            if not role: missing.append("Position")
-            incomplete.append({
-                "name": name, "mention": mention, "missing": missing, "squad": squad
-            })
+    if not completed:
+        embed = discord.Embed(
+            title="📜 Royal Census",
+            description="*The scrolls are empty. No warriors have completed their registration.*",
+            color=ROYAL_PURPLE
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        return
 
-    # Count members with no profile at all
-    all_member_ids = {str(m.id) for m in guild.members if not m.bot}
-    profiled_ids = set(squad_data["players"].keys())
-    no_profile = len(all_member_ids - profiled_ids)
+    # Group by squad
+    by_squad = {}
+    for p in completed:
+        sq = p["squad"] or "Free Agent"
+        if sq not in by_squad:
+            by_squad[sq] = []
+        by_squad[sq].append(p)
 
-    # Build embeds
     embeds = []
 
-    # Summary embed
+    # Summary
     summary = discord.Embed(
-        title="📋 Profile Registry",
-        description=(
-            f"✅ **{len(completed)}** completed profiles\n"
-            f"⚠️ **{len(incomplete)}** incomplete profiles\n"
-            f"❌ **{no_profile}** members with no profile\n\n"
-            f"📊 **Total server members (non-bot):** {len(all_member_ids)}"
-        ),
-        color=ROYAL_GREEN if len(completed) > len(incomplete) else ROYAL_GOLD
+        title="📜 Royal Census — Registered Warriors",
+        description=f"**{len(completed)}** warriors have completed their registration across **{len(by_squad)}** kingdoms.",
+        color=ROYAL_GOLD
     )
+    summary.set_footer(text="⚜️ Majestic Dominion | The Crown keeps record of all who serve")
     embeds.append(summary)
 
-    # Completed profiles embed(s)
-    if completed:
-        # Group by squad
-        by_squad = {}
-        for p in completed:
-            sq = p["squad"] or "Free Agent"
-            if sq not in by_squad:
-                by_squad[sq] = []
-            by_squad[sq].append(p)
-
-        comp_embed = discord.Embed(title="✅ Completed Profiles", color=ROYAL_GREEN)
-        field_count = 0
-        for sq_name in sorted(by_squad.keys()):
-            members_list = by_squad[sq_name]
-            tag = SQUADS.get(sq_name, "")
-            lines = []
-            for p in members_list[:15]:
-                lines.append(f"{p['mention']} — `{p['ign']}` | {p['rank']} | {p['role']}")
-            text = "\n".join(lines)
-            if len(members_list) > 15:
-                text += f"\n*+{len(members_list) - 15} more...*"
-            if len(text) > 1024:
-                text = text[:1020] + "..."
-            comp_embed.add_field(
-                name=f"{tag} {sq_name} ({len(members_list)})",
-                value=text,
-                inline=False
-            )
-            field_count += 1
-            if field_count >= 20:
-                embeds.append(comp_embed)
-                comp_embed = discord.Embed(title="✅ Completed Profiles (cont.)", color=ROYAL_GREEN)
-                field_count = 0
-        if field_count > 0:
-            embeds.append(comp_embed)
-
-    # Incomplete profiles embed
-    if incomplete:
-        inc_embed = discord.Embed(title="⚠️ Incomplete Profiles", color=ROYAL_GOLD)
+    # One embed per batch of squads (max 20 fields per embed)
+    roster_embed = discord.Embed(title="👑 Kingdom Rosters", color=ROYAL_PURPLE)
+    field_count = 0
+    for sq_name in sorted(by_squad.keys()):
+        members_list = by_squad[sq_name]
+        tag = SQUADS.get(sq_name, "⚔️")
         lines = []
-        for p in incomplete[:25]:
-            sq_tag = SQUADS.get(p["squad"], "") if p["squad"] else ""
-            missing_str = ", ".join(p["missing"])
-            lines.append(f"{p['mention']} {sq_tag} — Missing: **{missing_str}**")
-        inc_embed.description = "\n".join(lines)
-        if len(incomplete) > 25:
-            inc_embed.set_footer(text=f"+{len(incomplete) - 25} more incomplete profiles")
-        embeds.append(inc_embed)
+        for p in members_list[:20]:
+            lines.append(f"{p['mention']} — `{p['ign']}` | {p['rank']} | {p['role']}")
+        text = "\n".join(lines)
+        if len(members_list) > 20:
+            text += f"\n*...and {len(members_list) - 20} more sworn warriors*"
+        if len(text) > 1024:
+            text = text[:1020] + "..."
+        roster_embed.add_field(
+            name=f"{tag} {sq_name} — {len(members_list)} registered",
+            value=text,
+            inline=False
+        )
+        field_count += 1
+        if field_count >= 15:
+            embeds.append(roster_embed)
+            roster_embed = discord.Embed(title="👑 Kingdom Rosters (continued)", color=ROYAL_PURPLE)
+            field_count = 0
+    if field_count > 0:
+        embeds.append(roster_embed)
 
-    # Send all embeds
     await interaction.followup.send(embeds=embeds[:10], ephemeral=True)
-    await log_action(guild, "📋 /profiles",
-        f"{interaction.user.mention} viewed **Profile Registry** ({len(completed)} complete, {len(incomplete)} incomplete)")
+    await log_action(guild, "📜 /profiles",
+        f"{interaction.user.mention} viewed **Royal Census** — {len(completed)} registered warriors")
 
 
-@bot.tree.command(name="help", description="📜 Majestic Help — command guide")
+@bot.tree.command(name="help", description="📜 Open the Royal Codex of the Dominion")
 async def help_command(interaction: discord.Interaction):
     view = HelpView()
     embed = discord.Embed(
-        title="📜 Majestic Help",
-        description="Select a category below to learn more!",
+        title="📜 Royal Codex of the Dominion",
+        description="*The sacred texts of the Majestic Dominion — select a chapter:*",
         color=ROYAL_PURPLE
     )
     embed.add_field(name="🎯 Commands", value=(
@@ -4653,16 +4633,16 @@ async def help_command(interaction: discord.Interaction):
         "`/leader` — Leader panel (manage roster & kingdom)\n"
         "`/mod` — Moderator panel (matches & titles)\n"
         "`/profile @user` — View anyone's profile\n"
-        "`/profiles` — All completed profiles (mod only)\n"
+        "`/profiles` — Royal Census (council only)\n"
         "`/restore` — Restore data from backup (mod only)\n"
         "`/help` — This menu"
     ), inline=False)
-    embed.set_footer(text="⚜️ Majestic Bot")
+    embed.set_footer(text="⚜️ Majestic Dominion")
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
     await log_action(interaction.guild, "📜 /help", f"{interaction.user.mention} opened **Help Menu**")
 
 
-@bot.tree.command(name="restore", description="💾 Restore data from a backup JSON file")
+@bot.tree.command(name="restore", description="💾 Restore the royal archives from a backup scroll")
 @app_commands.describe(backup="The backup JSON file to restore")
 async def restore_command(interaction: discord.Interaction, backup: discord.Attachment):
     global squad_data
@@ -4777,7 +4757,7 @@ async def on_ready():
     if not daily_pulse_task.is_running():
         daily_pulse_task.start()
     print(f"✅ Logged in as {bot.user}")
-    print(f"⚜️ Majestic Bot is ready!")
+    print(f"⚜️ Majestic Dominion Bot is online! The Crown watches over all.")
     for guild in bot.guilds:
         for member in guild.members:
             role, tag = get_member_squad(member, guild)
