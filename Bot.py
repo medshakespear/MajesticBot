@@ -111,8 +111,8 @@ ROLE_EMOJIS = {
 }
 
 ALL_TAGS = list(SQUADS.values())
-LOG_CHANNEL_NAME = "bot-logs"
-ANNOUNCE_CHANNEL_NAME = "war-results"
+LOG_CHANNEL_NAME = "『🕹️』bot-logs"
+ANNOUNCE_CHANNEL_NAME = "『🏆』war-results"
 
 # Glory Points system modifiers
 GLORY_BASE_WIN = 3
