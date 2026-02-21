@@ -4538,8 +4538,6 @@ async def profiles_command(interaction: discord.Interaction):
         await interaction.response.send_message("❌ Only the **Royal Council** may access the census.", ephemeral=True)
         return
 
-    await interaction.response.defer(ephemeral=True)
-
     guild = interaction.guild
     completed = []
 
@@ -4566,7 +4564,7 @@ async def profiles_command(interaction: discord.Interaction):
             description="*The scrolls are empty. No warriors have completed their registration.*",
             color=ROYAL_PURPLE
         )
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
         return
 
     # Group by squad
@@ -4577,47 +4575,107 @@ async def profiles_command(interaction: discord.Interaction):
             by_squad[sq] = []
         by_squad[sq].append(p)
 
-    embeds = []
-
-    # Summary
-    summary = discord.Embed(
-        title="📜 Royal Census — Registered Warriors",
-        description=f"**{len(completed)}** warriors have completed their registration across **{len(by_squad)}** kingdoms.",
-        color=ROYAL_GOLD
+    squad_names = sorted(by_squad.keys())
+    await interaction.response.send_message(
+        embed=build_census_page(by_squad, squad_names, 0, len(completed)),
+        view=CensusPageView(by_squad, squad_names, 0, interaction.user.id, len(completed)),
+        ephemeral=True
     )
-    summary.set_footer(text="⚜️ Majestic Dominion | The Crown keeps record of all who serve")
-    embeds.append(summary)
-
-    # One embed per batch of squads (max 20 fields per embed)
-    roster_embed = discord.Embed(title="👑 Kingdom Rosters", color=ROYAL_PURPLE)
-    field_count = 0
-    for sq_name in sorted(by_squad.keys()):
-        members_list = by_squad[sq_name]
-        tag = SQUADS.get(sq_name, "⚔️")
-        lines = []
-        for p in members_list[:20]:
-            lines.append(f"{p['mention']} — `{p['ign']}` | {p['rank']} | {p['role']}")
-        text = "\n".join(lines)
-        if len(members_list) > 20:
-            text += f"\n*...and {len(members_list) - 20} more sworn warriors*"
-        if len(text) > 1024:
-            text = text[:1020] + "..."
-        roster_embed.add_field(
-            name=f"{tag} {sq_name} — {len(members_list)} registered",
-            value=text,
-            inline=False
-        )
-        field_count += 1
-        if field_count >= 15:
-            embeds.append(roster_embed)
-            roster_embed = discord.Embed(title="👑 Kingdom Rosters (continued)", color=ROYAL_PURPLE)
-            field_count = 0
-    if field_count > 0:
-        embeds.append(roster_embed)
-
-    await interaction.followup.send(embeds=embeds[:10], ephemeral=True)
     await log_action(guild, "📜 /profiles",
         f"{interaction.user.mention} viewed **Royal Census** — {len(completed)} registered warriors")
+
+
+def build_census_page(by_squad, squad_names, page, total_warriors):
+    """Build a single census page (one kingdom per page, or summary on page 0)."""
+    total_pages = len(squad_names) + 1  # page 0 = summary, page 1+ = kingdoms
+
+    if page == 0:
+        # Summary page
+        embed = discord.Embed(
+            title="📜 Royal Census — Registered Warriors",
+            description=f"**{total_warriors}** warriors have completed their registration across **{len(squad_names)}** kingdoms.\n\n*Use the buttons below to browse each kingdom's roster.*",
+            color=ROYAL_GOLD
+        )
+        # Quick overview of each kingdom's count
+        overview = ""
+        for sq_name in squad_names:
+            tag = SQUADS.get(sq_name, "⚔️")
+            count = len(by_squad[sq_name])
+            overview += f"{tag} **{sq_name}** — {count} warriors\n"
+        if overview:
+            embed.add_field(name="👑 Kingdom Overview", value=overview[:1024], inline=False)
+        embed.set_footer(text=f"⚜️ Page 1/{total_pages} | Majestic Dominion Royal Census")
+        return embed
+    else:
+        # Kingdom roster page
+        idx = page - 1
+        if idx >= len(squad_names):
+            idx = len(squad_names) - 1
+        sq_name = squad_names[idx]
+        members_list = by_squad[sq_name]
+        tag = SQUADS.get(sq_name, "⚔️")
+
+        embed = discord.Embed(
+            title=f"{tag} {sq_name} — Royal Roster",
+            description=f"**{len(members_list)}** registered warriors",
+            color=ROYAL_PURPLE
+        )
+
+        # Split into chunks of 10 to stay under field limits
+        for i in range(0, len(members_list), 10):
+            chunk = members_list[i:i+10]
+            lines = []
+            for p in chunk:
+                lines.append(f"{p['mention']} — `{p['ign']}` | {p['rank']} | {p['role']}")
+            text = "\n".join(lines)
+            if len(text) > 1024:
+                text = text[:1020] + "..."
+            field_name = "⚔️ Warriors" if i == 0 else f"⚔️ Warriors (cont.)"
+            embed.add_field(name=field_name, value=text, inline=False)
+            if embed.fields and len(embed.fields) >= 5:
+                break  # Safety: max 5 fields per page
+
+        embed.set_footer(text=f"⚜️ Page {page + 1}/{total_pages} | Majestic Dominion Royal Census")
+        return embed
+
+
+class CensusPageView(View):
+    """Paginated view for /profiles royal census."""
+    def __init__(self, by_squad, squad_names, page, author_id, total_warriors):
+        super().__init__(timeout=180)
+        self.by_squad = by_squad
+        self.squad_names = squad_names
+        self.page = page
+        self.author_id = author_id
+        self.total_warriors = total_warriors
+        self.total_pages = len(squad_names) + 1
+        self._update_buttons()
+
+    def _update_buttons(self):
+        self.prev_btn.disabled = self.page <= 0
+        self.next_btn.disabled = self.page >= self.total_pages - 1
+
+    @discord.ui.button(label="◀ Prev", style=discord.ButtonStyle.secondary, row=0)
+    async def prev_btn(self, interaction: discord.Interaction, button: Button):
+        if interaction.user.id != self.author_id:
+            return await interaction.response.send_message("❌ Not your census.", ephemeral=True)
+        self.page = max(0, self.page - 1)
+        self._update_buttons()
+        await interaction.response.edit_message(
+            embed=build_census_page(self.by_squad, self.squad_names, self.page, self.total_warriors),
+            view=self
+        )
+
+    @discord.ui.button(label="▶ Next", style=discord.ButtonStyle.secondary, row=0)
+    async def next_btn(self, interaction: discord.Interaction, button: Button):
+        if interaction.user.id != self.author_id:
+            return await interaction.response.send_message("❌ Not your census.", ephemeral=True)
+        self.page = min(self.total_pages - 1, self.page + 1)
+        self._update_buttons()
+        await interaction.response.edit_message(
+            embed=build_census_page(self.by_squad, self.squad_names, self.page, self.total_warriors),
+            view=self
+        )
 
 
 @bot.tree.command(name="help", description="📜 Open the Royal Codex of the Dominion")
