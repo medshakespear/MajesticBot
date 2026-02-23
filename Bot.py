@@ -113,6 +113,17 @@ ROLE_EMOJIS = {
 ALL_TAGS = list(SQUADS.values())
 LOG_CHANNEL_NAME = "『🕹️』bot-logs"
 ANNOUNCE_CHANNEL_NAME = "『🏆』war-results"
+NEWS_CHANNEL_NAME = "『📢』𝐀𝐧𝐧𝐨𝐮𝐧𝐜𝐞𝐦𝐞𝐧𝐭𝐬"
+TOURNAMENT_CHANNEL_NAME = "『🗞️』𝐓𝐨𝐮𝐫𝐧𝐚𝐦𝐞𝐧𝐭-𝐍𝐞𝐰𝐬"
+BOT_COMMANDS_CHANNEL_NAME = "『👑』majestic-𝐁𝐨𝐭-𝐂𝐨𝐦𝐦𝐚𝐧𝐝𝐬"
+MAJESTIC_ROLE_NAME = "MAJESTIC"
+BOT_GUIDE_POSTED_KEY = "bot_guide_message_id"
+
+ANNOUNCEMENT_CHANNELS = {
+    "📢 Announcements": NEWS_CHANNEL_NAME,
+    "🗞️ Tournament News": TOURNAMENT_CHANNEL_NAME,
+    "🏆 War Results": ANNOUNCE_CHANNEL_NAME,
+}
 
 # Glory Points system modifiers
 GLORY_BASE_WIN = 3
@@ -2646,6 +2657,374 @@ class CancelChallengeSelectView(View):
 
 
 # =====================================================================
+#                     ANNOUNCEMENT SYSTEM (Moderator)
+# =====================================================================
+
+class AnnouncementChannelView(View):
+    """Step 1: Select which channel to announce in."""
+    def __init__(self):
+        super().__init__(timeout=180)
+        options = [
+            discord.SelectOption(label=label, value=ch_name, emoji=label[0])
+            for label, ch_name in ANNOUNCEMENT_CHANNELS.items()
+        ]
+        select = Select(placeholder="📢 Select announcement channel...", options=options)
+        select.callback = self.selected
+        self.add_item(select)
+
+    async def selected(self, interaction):
+        channel_name = interaction.data["values"][0]
+        # Check channel exists
+        ch = discord.utils.get(interaction.guild.text_channels, name=channel_name)
+        if not ch:
+            await interaction.response.send_message(f"❌ Channel `{channel_name}` not found in this server.", ephemeral=True)
+            return
+        await interaction.response.send_modal(AnnouncementModal(channel_name))
+
+
+class AnnouncementModal(Modal, title="📢 Royal Announcement"):
+    def __init__(self, channel_name):
+        super().__init__()
+        self.channel_name = channel_name
+        self.ann_title = TextInput(
+            label="Announcement Title",
+            placeholder="e.g., Season 3 Begins!",
+            required=True,
+            max_length=200
+        )
+        self.ann_body = TextInput(
+            label="Announcement Body",
+            placeholder="Write your announcement here...",
+            style=discord.TextStyle.paragraph,
+            required=True,
+            max_length=2000
+        )
+        self.ann_images = TextInput(
+            label="Image URLs (one per line, optional)",
+            placeholder="https://i.imgur.com/example.png\nhttps://...",
+            style=discord.TextStyle.paragraph,
+            required=False,
+            max_length=1000
+        )
+        self.add_item(self.ann_title)
+        self.add_item(self.ann_body)
+        self.add_item(self.ann_images)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        ch = discord.utils.get(interaction.guild.text_channels, name=self.channel_name)
+        if not ch:
+            await interaction.response.send_message(f"❌ Channel not found.", ephemeral=True)
+            return
+
+        title = self.ann_title.value.strip()
+        body = self.ann_body.value.strip()
+        image_text = self.ann_images.value.strip() if self.ann_images.value else ""
+
+        # Parse image URLs
+        image_urls = []
+        if image_text:
+            for line in image_text.split("\n"):
+                url = line.strip()
+                if url.startswith("http"):
+                    image_urls.append(url)
+
+        # Build main embed
+        embed = discord.Embed(
+            title=f"📢 {title}",
+            description=body,
+            color=ROYAL_GOLD,
+            timestamp=datetime.utcnow()
+        )
+        embed.set_footer(text=f"⚜️ Majestic Dominion | Announced by {interaction.user.display_name}")
+
+        # Set first image as embed thumbnail/image
+        if image_urls:
+            embed.set_image(url=image_urls[0])
+
+        # Find @MAJESTIC role
+        majestic_role = discord.utils.get(interaction.guild.roles, name=MAJESTIC_ROLE_NAME)
+        mention_text = majestic_role.mention if majestic_role else f"@{MAJESTIC_ROLE_NAME}"
+
+        try:
+            # Send main announcement
+            await ch.send(content=f"📢 {mention_text}", embed=embed)
+
+            # Send additional images as separate messages
+            for img_url in image_urls[1:]:
+                extra_embed = discord.Embed(color=ROYAL_GOLD)
+                extra_embed.set_image(url=img_url)
+                await ch.send(embed=extra_embed)
+
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    title="✅ Royal Announcement Published!",
+                    description=f"Posted to **{self.channel_name}** with {len(image_urls)} image(s).",
+                    color=ROYAL_GREEN
+                ),
+                ephemeral=True
+            )
+            await log_action(interaction.guild, "📢 Announcement",
+                f"{interaction.user.mention} published announcement **{title}** to `{self.channel_name}` ({len(image_urls)} images)")
+
+        except discord.Forbidden:
+            await interaction.response.send_message("❌ Bot lacks permission to post in that channel.", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
+
+
+# =====================================================================
+#                     BOT COMMANDS CHANNEL SYSTEM
+# =====================================================================
+
+BOT_GUIDE_EMBED_PAGES = []
+
+def build_bot_guide_embeds():
+    """Build the permanent bot guide for the commands channel."""
+    embeds = []
+
+    # Page 1: Welcome
+    e1 = discord.Embed(
+        title="👑 WELCOME TO THE MAJESTIC DOMINION",
+        description=(
+            "⚜️ *This is the official command center of the Majestic Dominion.*\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Use this channel to interact with the Royal Bot.\n"
+            "Type any of the commands below to begin your journey.\n\n"
+            "**All commands work right here — just type and go!**"
+        ),
+        color=ROYAL_GOLD
+    )
+    e1.add_field(
+        name="⚔️ Available Commands",
+        value=(
+            "👤 `/member` — Open the Royal Court (your main hub)\n"
+            "👑 `/leader` — Sovereign Command (leaders only)\n"
+            "🛡️ `/mod` — Royal Council Chamber (moderators only)\n"
+            "⚜️ `/profile @user` — View any warrior's royal scroll\n"
+            "📜 `/help` — Open the Royal Codex\n"
+        ),
+        inline=False
+    )
+    embeds.append(e1)
+
+    # Page 2: Member Guide
+    e2 = discord.Embed(
+        title="⚜️ THE ROYAL COURT — `/member`",
+        description="*Everything a citizen of the Dominion needs.*",
+        color=ROYAL_PURPLE
+    )
+    e2.add_field(
+        name="🏰 Explore",
+        value=(
+            "**Browse Kingdoms** — Explore every kingdom's stats, history, and AI analysis\n"
+            "**Rankings** — See the full Glory Points leaderboard\n"
+            "**View Profile** — Search any warrior by name\n"
+            "**Fun Stats** — Royal court curiosities and realm trivia\n"
+            "**Realm News** — Auto-generated headlines from the chronicles"
+        ),
+        inline=False
+    )
+    e2.add_field(
+        name="⚔️ Competition",
+        value=(
+            "**War Oracle** — AI predicts the outcome of any matchup\n"
+            "**Bounties** — See who has a price on their crown\n"
+            "**Challenges** — View all active war declarations"
+        ),
+        inline=False
+    )
+    e2.add_field(
+        name="👤 Your Profile",
+        value=(
+            "**My Kingdom** — Your kingdom's stats and roster\n"
+            "**My Profile** — Your warrior scroll\n"
+            "**Setup Profile** — Register your IGN, Game ID, Rank, and Position\n"
+            "**Leave Kingdom** — Leave your current kingdom"
+        ),
+        inline=False
+    )
+    embeds.append(e2)
+
+    # Page 3: Glory Points & Challenges
+    e3 = discord.Embed(
+        title="💎 GLORY POINTS & CHALLENGES",
+        description="*How the Dominion's ranking system works.*",
+        color=ROYAL_RED
+    )
+    e3.add_field(
+        name="💎 Glory Points",
+        value=(
+            "Wins don't all count the same. The Glory system rewards skill and courage:\n\n"
+            "**Base:** Win = **3 pts** | Draw = **1 pt**\n\n"
+            "⚡ **Upset** (+1 to +3) — Beat a higher-ranked kingdom\n"
+            "👑 **Giant Slayer** (+3) — Beat a Top 3 kingdom\n"
+            "🔥 **Streak Fire** (+1) — 3+ win streak\n"
+            "🧹 **Clean Sheet** (+1) — Opponent scored 0\n"
+            "💰 **Bounty Claimed** (+1 to +5) — Target had a bounty\n"
+            "📉 **Expected** (-1) — Beat a much weaker kingdom"
+        ),
+        inline=False
+    )
+    e3.add_field(
+        name="⚔️ Challenges",
+        value=(
+            "Kingdom leaders can declare war on other kingdoms!\n\n"
+            "1️⃣ Leader uses `/leader` → ⚔️ **Challenge**\n"
+            "2️⃣ Challenge posted in 『🏆』war-results\n"
+            "3️⃣ Opponent leaders **Accept** or **Decline**\n"
+            "4️⃣ Admin schedules the match date\n"
+            "5️⃣ Match is played → admin records result"
+        ),
+        inline=False
+    )
+    e3.add_field(
+        name="💰 Bounties",
+        value=(
+            "The **Top 3** kingdoms always have automatic bounties.\n"
+            "Beat them and earn **bonus Glory Points** on top of your normal win!\n"
+            "Check the bounty board anytime with `/member` → 💰 **Bounties**"
+        ),
+        inline=False
+    )
+    embeds.append(e3)
+
+    # Page 4: Leader Guide
+    e4 = discord.Embed(
+        title="👑 LEADER'S GUIDE",
+        description="*For kingdom leaders — your sovereign powers.*",
+        color=ROYAL_GOLD
+    )
+    e4.add_field(
+        name="👑 `/leader` Powers",
+        value=(
+            "➕ **Add Member** — Recruit warriors to your kingdom\n"
+            "➖ **Remove Member** — Release warriors from service\n"
+            "⭐ **Set Main** (5 max) — Your core competitive roster\n"
+            "🔄 **Set Sub** (3 max) — Backup warriors\n"
+            "👑 **Promote Leader** — Grant leader access\n"
+            "🎭 **Give/Remove Guest** — Manage guest access\n"
+            "🖼️ **Set Logo** — Your kingdom's royal emblem\n"
+            "⚔️ **Challenge** — Declare war on another kingdom"
+        ),
+        inline=False
+    )
+    e4.add_field(
+        name="⚠️ Important",
+        value=(
+            "• **Only main roster players count** in official matches\n"
+            "• Set your mains before any match\n"
+            "• Contact an admin to schedule after a challenge is accepted\n"
+            "• Send a **screenshot** of results to admin after the match"
+        ),
+        inline=False
+    )
+    embeds.append(e4)
+
+    # Page 5: What to Watch
+    e5 = discord.Embed(
+        title="📢 STAY CONNECTED",
+        description="*Where to follow the action in the Dominion.*",
+        color=ROYAL_PURPLE
+    )
+    e5.add_field(
+        name="📺 Live Channels",
+        value=(
+            "**『🏆』war-results** — Match results, streak alerts, rank changes, challenges, daily pulse, weekly digest\n"
+            "**『📢』Announcements** — Official royal announcements\n"
+            "**『🗞️』Tournament News** — Tournament updates and brackets"
+        ),
+        inline=False
+    )
+    e5.add_field(
+        name="🤖 Auto-Posts",
+        value=(
+            "⚜️ **Daily Royal Decree** — Posted daily at 12:00 UTC\n"
+            "📰 **Weekly Royal Chronicle** — Posted every Sunday at 18:00 UTC\n"
+            "🔥 **Streak Alerts** — When kingdoms hit 3, 5, 7, 10+ streaks\n"
+            "📈 **Rank Changes** — When kingdoms enter/leave the Top 3\n"
+            "🏅 **Royal Honours** — Achievement unlocks"
+        ),
+        inline=False
+    )
+    e5.set_footer(text="⚜️ Majestic Dominion | Glory awaits those who dare. Type /member to begin!")
+    embeds.append(e5)
+
+    return embeds
+
+
+async def setup_bot_commands_channel(guild):
+    """Post the permanent guide in the bot commands channel (once)."""
+    channel = discord.utils.get(guild.text_channels, name=BOT_COMMANDS_CHANNEL_NAME)
+    if not channel:
+        return
+
+    stored_id = squad_data.get(BOT_GUIDE_POSTED_KEY)
+
+    # Check if guide message still exists
+    if stored_id:
+        try:
+            msg = await channel.fetch_message(int(stored_id))
+            if msg:
+                return  # Guide already exists
+        except (discord.NotFound, discord.HTTPException, ValueError):
+            pass  # Message gone, re-post
+
+    # Post the guide
+    embeds = build_bot_guide_embeds()
+    try:
+        # Send embeds in batches of 10 (Discord limit)
+        first_msg = await channel.send(
+            content="👑 **WELCOME TO THE MAJESTIC DOMINION** 👑\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            embeds=embeds[:5]
+        )
+        squad_data[BOT_GUIDE_POSTED_KEY] = str(first_msg.id)
+        save_data(squad_data)
+    except Exception as e:
+        print(f"⚠️ Could not post guide: {e}")
+
+
+@tasks.loop(hours=1)
+async def bot_commands_cleanup_task():
+    """Clean the bot commands channel daily at 04:00 UTC — keep only the guide message."""
+    now = datetime.utcnow()
+    if now.hour != 4:
+        return
+
+    for guild in bot.guilds:
+        channel = discord.utils.get(guild.text_channels, name=BOT_COMMANDS_CHANNEL_NAME)
+        if not channel:
+            continue
+
+        stored_id = squad_data.get(BOT_GUIDE_POSTED_KEY)
+        if not stored_id:
+            continue
+
+        try:
+            deleted_count = 0
+            async for message in channel.history(limit=200):
+                if str(message.id) == stored_id:
+                    continue  # Keep the guide
+                try:
+                    await message.delete()
+                    deleted_count += 1
+                except:
+                    pass
+
+            if deleted_count > 0:
+                await log_action(guild, "🧹 Channel Cleanup",
+                    f"Auto-cleaned **{deleted_count}** messages from `{BOT_COMMANDS_CHANNEL_NAME}`")
+        except discord.Forbidden:
+            pass
+        except Exception as e:
+            print(f"⚠️ Cleanup error: {e}")
+
+
+@bot_commands_cleanup_task.before_loop
+async def before_cleanup():
+    await bot.wait_until_ready()
+
+
+# =====================================================================
 #                     WEEKLY DIGEST (Auto-post Sunday)
 # =====================================================================
 
@@ -4251,6 +4630,16 @@ class ModeratorPanelView(View):
         await interaction.response.send_message(embed=embed, view=ManageChallengesView(), ephemeral=True)
         await log_action(interaction.guild, "🎯 Challenges", f"{interaction.user.mention} opened **Challenge Manager**")
 
+    @discord.ui.button(label="Announce", style=discord.ButtonStyle.success, emoji="📢", row=4)
+    async def announce_btn(self, interaction: discord.Interaction, button: Button):
+        embed = discord.Embed(
+            title="📢 Royal Announcement",
+            description="*Choose where to publish your decree, Your Grace:*",
+            color=ROYAL_GOLD
+        )
+        await interaction.response.send_message(embed=embed, view=AnnouncementChannelView(), ephemeral=True)
+        await log_action(interaction.guild, "📢 Announce", f"{interaction.user.mention} started **Royal Announcement**")
+
 
 async def show_recent_matches(interaction, limit=10):
     recent = squad_data["matches"][-limit:][::-1]
@@ -4365,6 +4754,7 @@ class HelpView(View):
             embed.add_field(name="💀 Remove Kingdom", value="Disband a kingdom — optionally delete Discord roles too", inline=False)
             embed.add_field(name="💰 Bounties", value="Add, remove, or clear all bounties — full bounty manager", inline=False)
             embed.add_field(name="🎯 Challenges", value="Schedule matches, cancel challenges, clear old ones — full challenge manager", inline=False)
+            embed.add_field(name="📢 Announce", value="Publish royal announcements to Announcements, Tournament News, or War Results with @MAJESTIC ping and images", inline=False)
             embed.add_field(name="📋 /profiles", value="Royal Census — view all registered warriors by kingdom", inline=False)
         else:  # help
             embed = discord.Embed(title="📜 Royal Codex of the Dominion", description="Quick guide to all commands", color=ROYAL_PURPLE)
@@ -4814,9 +5204,12 @@ async def on_ready():
         weekly_digest_task.start()
     if not daily_pulse_task.is_running():
         daily_pulse_task.start()
+    if not bot_commands_cleanup_task.is_running():
+        bot_commands_cleanup_task.start()
     print(f"✅ Logged in as {bot.user}")
     print(f"⚜️ Majestic Dominion Bot is online! The Crown watches over all.")
     for guild in bot.guilds:
+        await setup_bot_commands_channel(guild)
         for member in guild.members:
             role, tag = get_member_squad(member, guild)
             await safe_nick_update(member, role, tag)
