@@ -115,7 +115,7 @@ LOG_CHANNEL_NAME = "『🕹️』bot-logs"
 ANNOUNCE_CHANNEL_NAME = "『🏆』war-results"
 NEWS_CHANNEL_NAME = "『📢』𝐀𝐧𝐧𝐨𝐮𝐧𝐜𝐞𝐦𝐞𝐧𝐭𝐬"
 TOURNAMENT_CHANNEL_NAME = "『🗞️』𝐓𝐨𝐮𝐫𝐧𝐚𝐦𝐞𝐧𝐭-𝐍𝐞𝐰𝐬"
-BOT_COMMANDS_CHANNEL_NAME = "『👑』majestic-𝐁𝐨𝐭-𝐂𝐨𝐦𝐦𝐚𝐧𝐝𝐬"
+BOT_COMMANDS_CHANNEL_NAME = "『👑』Majestic 𝐁𝐨𝐭-𝐂𝐨𝐦𝐦𝐚𝐧𝐝𝐬"
 MAJESTIC_ROLE_NAME = "MAJESTIC"
 BOT_GUIDE_POSTED_KEY = "bot_guide_message_id"
 
@@ -373,11 +373,49 @@ if "bounties" not in squad_data:
 
 
 # -------------------- LOGGING --------------------
+# Cached URL for transparent logo (uploaded once on startup)
+_transparent_logo_url = None
+
+
 def get_bot_logo():
-    """Get the bot's avatar URL for use in embeds."""
+    """Get the transparent logo URL for use in embed thumbnails."""
+    global _transparent_logo_url
+    if _transparent_logo_url:
+        return _transparent_logo_url
+    # Fallback to bot avatar if not yet cached
     if bot.user:
         return bot.user.display_avatar.url
     return None
+
+
+async def cache_transparent_logo(guild):
+    """Upload transparent logo once to bot-logs and cache the URL."""
+    global _transparent_logo_url
+    if _transparent_logo_url:
+        return
+    # Check if we already have a cached URL in data
+    cached = squad_data.get("_transparent_logo_url")
+    if cached:
+        _transparent_logo_url = cached
+        return
+    # Upload to log channel
+    if not os.path.exists(LOGO_TRANSPARENT):
+        return
+    channel = discord.utils.get(guild.text_channels, name=LOG_CHANNEL_NAME)
+    if not channel:
+        return
+    try:
+        msg = await channel.send(
+            content="⚜️ *Transparent logo cached for embed thumbnails — do not delete*",
+            file=discord.File(LOGO_TRANSPARENT, filename="logo.png")
+        )
+        if msg.attachments:
+            _transparent_logo_url = msg.attachments[0].url
+            squad_data["_transparent_logo_url"] = _transparent_logo_url
+            save_data(squad_data)
+            print("✅ Transparent logo cached for embeds")
+    except Exception as e:
+        print(f"⚠️ Could not cache logo: {e}")
 
 
 def apply_branding(embed, thumbnail=True, author=False):
@@ -1552,7 +1590,7 @@ class MemberSelectorView(View):
             "promote_leader": "👑 Select to promote...",
             "give_guest": "🎭 Select for guest role...",
             "remove_guest": "Remove guest role...",
-            "clear_history": "Select a player to clear history..."
+            "clear_history": "Select player to clear history..."
         }
 
         options = [discord.SelectOption(label=m.display_name[:100], value=str(m.id), description=f"@{m.name[:50]}") for m in pm]
@@ -1819,6 +1857,11 @@ async def announce_event(guild, embed, content=None):
     """Post any live event to #『🏆』war-results."""
     apply_branding(embed, thumbnail=True, author=True)
     channel = discord.utils.get(guild.text_channels, name=ANNOUNCE_CHANNEL_NAME)
+    if channel:
+        try:
+            await channel.send(content=content, embed=embed)
+        except:
+            pass
 
 
 async def announce_major(guild, embed, content=None):
@@ -1833,11 +1876,6 @@ async def announce_major(guild, embed, content=None):
                 await channel.send(content=content, embed=embed, file=file)
             else:
                 await channel.send(content=content, embed=embed)
-        except:
-            pass
-    if channel:
-        try:
-            await channel.send(content=content, embed=embed)
         except:
             pass
 
@@ -5355,18 +5393,19 @@ async def on_ready():
     # Set bot avatar to Majestic Dominion logo (once)
     if os.path.exists(LOGO_DARK):
         try:
-            if not squad_data.get("_avatar_set"):
+            if not squad_data.get("_avatar_set_dark"):
                 with open(LOGO_DARK, "rb") as f:
                     await bot.user.edit(avatar=f.read())
-                squad_data["_avatar_set"] = True
+                squad_data["_avatar_set_dark"] = True
                 save_data(squad_data)
-                print("👑 Bot avatar set to Majestic Dominion logo!")
+                print("👑 Bot avatar set to Majestic Dominion dark logo!")
         except Exception as e:
             print(f"⚠️ Could not set avatar: {e}")
 
     print(f"✅ Logged in as {bot.user}")
     print(f"⚜️ Majestic Dominion Bot is online! The Crown watches over all.")
     for guild in bot.guilds:
+        await cache_transparent_logo(guild)
         await setup_bot_commands_channel(guild)
         for member in guild.members:
             role, tag = get_member_squad(member, guild)
