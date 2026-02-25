@@ -115,7 +115,7 @@ LOG_CHANNEL_NAME = "『🕹️』bot-logs"
 ANNOUNCE_CHANNEL_NAME = "『🏆』war-results"
 NEWS_CHANNEL_NAME = "『📢』𝐀𝐧𝐧𝐨𝐮𝐧𝐜𝐞𝐦𝐞𝐧𝐭𝐬"
 TOURNAMENT_CHANNEL_NAME = "『🗞️』𝐓𝐨𝐮𝐫𝐧𝐚𝐦𝐞𝐧𝐭-𝐍𝐞𝐰𝐬"
-BOT_COMMANDS_CHANNEL_NAME = "『👑』majestic 𝐁𝐨𝐭-𝐂𝐨𝐦𝐦𝐚𝐧𝐝𝐬"
+BOT_COMMANDS_CHANNEL_NAME = "『👑』majestic-𝐁𝐨𝐭-𝐂𝐨𝐦𝐦𝐚𝐧𝐝𝐬"
 MAJESTIC_ROLE_NAME = "MAJESTIC"
 BOT_GUIDE_POSTED_KEY = "bot_guide_message_id"
 
