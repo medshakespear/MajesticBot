@@ -1552,7 +1552,7 @@ class MemberSelectorView(View):
             "promote_leader": "👑 Select to promote...",
             "give_guest": "🎭 Select for guest role...",
             "remove_guest": "Remove guest role...",
-            "clear_history": "Select player to clear history..."
+            "clear_history": "Select a player to clear history..."
         }
 
         options = [discord.SelectOption(label=m.display_name[:100], value=str(m.id), description=f"@{m.name[:50]}") for m in pm]
