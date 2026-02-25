@@ -5353,10 +5353,10 @@ async def on_ready():
         bot_commands_cleanup_task.start()
 
     # Set bot avatar to Majestic Dominion logo (once)
-    if os.path.exists(LOGO_TRANSPARENT):
+    if os.path.exists(LOGO_DARK):
         try:
             if not squad_data.get("_avatar_set"):
-                with open(LOGO_TRANSPARENT, "rb") as f:
+                with open(LOGO_DARK, "rb") as f:
                     await bot.user.edit(avatar=f.read())
                 squad_data["_avatar_set"] = True
                 save_data(squad_data)
