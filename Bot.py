@@ -115,9 +115,13 @@ LOG_CHANNEL_NAME = "『🕹️』bot-logs"
 ANNOUNCE_CHANNEL_NAME = "『🏆』war-results"
 NEWS_CHANNEL_NAME = "『📢』𝐀𝐧𝐧𝐨𝐮𝐧𝐜𝐞𝐦𝐞𝐧𝐭𝐬"
 TOURNAMENT_CHANNEL_NAME = "『🗞️』𝐓𝐨𝐮𝐫𝐧𝐚𝐦𝐞𝐧𝐭-𝐍𝐞𝐰𝐬"
-BOT_COMMANDS_CHANNEL_NAME = "『👑』majestic-𝐁𝐨𝐭-𝐂𝐨𝐦𝐦𝐚𝐧𝐝𝐬"
+BOT_COMMANDS_CHANNEL_NAME = "『👑』Majestic 𝐁𝐨𝐭-𝐂𝐨𝐦𝐦𝐚𝐧𝐝𝐬"
 MAJESTIC_ROLE_NAME = "MAJESTIC"
 BOT_GUIDE_POSTED_KEY = "bot_guide_message_id"
+
+# Logo files (place alongside bot.py)
+LOGO_TRANSPARENT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo_transparent.png")
+LOGO_DARK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo_dark.png")
 
 ANNOUNCEMENT_CHANNELS = {
     "📢 Announcements": NEWS_CHANNEL_NAME,
@@ -369,6 +373,24 @@ if "bounties" not in squad_data:
 
 
 # -------------------- LOGGING --------------------
+def get_bot_logo():
+    """Get the bot's avatar URL for use in embeds."""
+    if bot.user:
+        return bot.user.display_avatar.url
+    return None
+
+
+def apply_branding(embed, thumbnail=True, author=False):
+    """Apply Majestic Dominion branding to an embed."""
+    logo = get_bot_logo()
+    if logo:
+        if thumbnail:
+            embed.set_thumbnail(url=logo)
+        if author:
+            embed.set_author(name="Majestic Dominion", icon_url=logo)
+    return embed
+
+
 async def log_action(guild: discord.Guild, title: str, description: str):
     if guild is None:
         return
@@ -376,7 +398,10 @@ async def log_action(guild: discord.Guild, title: str, description: str):
     if channel is None:
         return
     embed = discord.Embed(title=title, description=description, color=ROYAL_PURPLE, timestamp=datetime.utcnow())
-    embed.set_footer(text="⚜️ Majestic Archives")
+    logo = get_bot_logo()
+    if logo:
+        embed.set_author(name="Majestic Dominion", icon_url=logo)
+    embed.set_footer(text="⚜️ Royal Archives")
     try:
         await channel.send(embed=embed)
     except Exception as e:
@@ -1266,8 +1291,12 @@ async def show_squad_info(interaction, squad_role, squad_name, tag, public=False
 
     if si.get('logo_url'):
         embed.set_thumbnail(url=si['logo_url'])
+    else:
+        logo = get_bot_logo()
+        if logo:
+            embed.set_thumbnail(url=logo)
 
-    embed.set_footer(text="⚜️ Majestic Archives | Use 📜 button for match history")
+    embed.set_footer(text="⚜️ Majestic Dominion | Royal Archives")
 
     view = SquadProfileView(squad_name)
 
@@ -1766,6 +1795,7 @@ def refresh_bounties():
 
 async def announce_match(guild, embed):
     """Post match result to the public #『🏆』war-results channel."""
+    apply_branding(embed, thumbnail=True, author=True)
     channel = discord.utils.get(guild.text_channels, name=ANNOUNCE_CHANNEL_NAME)
     if channel:
         try:
@@ -1776,6 +1806,7 @@ async def announce_match(guild, embed):
 
 async def announce_challenge(guild, embed, content=None):
     """Post challenge updates to #『🏆』war-results channel."""
+    apply_branding(embed, thumbnail=True, author=True)
     channel = discord.utils.get(guild.text_channels, name=ANNOUNCE_CHANNEL_NAME)
     if channel:
         try:
@@ -1786,6 +1817,7 @@ async def announce_challenge(guild, embed, content=None):
 
 async def announce_event(guild, embed, content=None):
     """Post any live event to #『🏆』war-results."""
+    apply_branding(embed, thumbnail=True, author=True)
     channel = discord.utils.get(guild.text_channels, name=ANNOUNCE_CHANNEL_NAME)
     if channel:
         try:
@@ -2227,6 +2259,7 @@ def build_bounty_embed():
                 inline=False
             )
     embed.set_footer(text="⚜️ Majestic Dominion | Royal bounties refresh after each battle")
+    apply_branding(embed, thumbnail=True)
     return embed
 
 
@@ -2424,6 +2457,7 @@ def build_challenge_manager_embed():
     completed = len([c for c in all_ch if c["status"] == "completed"])
     declined = len([c for c in all_ch if c["status"] == "declined"])
     embed.set_footer(text=f"📊 {len(active)} active | {completed} completed | {declined} declined | {total} total all-time")
+    apply_branding(embed, thumbnail=True)
     return embed
 
 
@@ -2971,12 +3005,24 @@ async def setup_bot_commands_channel(guild):
 
     # Post the guide
     embeds = build_bot_guide_embeds()
+    # Brand all guide embeds
+    for e in embeds:
+        apply_branding(e, thumbnail=True)
+
     try:
-        # Send embeds in batches of 10 (Discord limit)
+        # Send dark logo as banner first
+        files = []
+        if os.path.exists(LOGO_DARK):
+            files.append(discord.File(LOGO_DARK, filename="majestic_dominion.png"))
+
         first_msg = await channel.send(
             content="👑 **WELCOME TO THE MAJESTIC DOMINION** 👑\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-            embeds=embeds[:5]
+            files=files
         )
+
+        # Send embeds (max 10 per message)
+        await channel.send(embeds=embeds[:5])
+
         squad_data[BOT_GUIDE_POSTED_KEY] = str(first_msg.id)
         save_data(squad_data)
     except Exception as e:
@@ -3002,8 +3048,11 @@ async def bot_commands_cleanup_task():
         try:
             deleted_count = 0
             async for message in channel.history(limit=200):
+                # Keep the guide messages (posted by the bot)
                 if str(message.id) == stored_id:
-                    continue  # Keep the guide
+                    continue  # Keep the banner/logo
+                if message.author == bot.user and message.embeds:
+                    continue  # Keep bot's guide embeds
                 try:
                     await message.delete()
                     deleted_count += 1
@@ -3383,6 +3432,7 @@ class MemberPanelView(View):
         rankings = get_squad_ranking()
         tp = (len(rankings) + 14) // 15
         embed = discord.Embed(title="👑 The Royal Leaderboard", description=f"Page 1/{tp}", color=ROYAL_GOLD)
+        apply_branding(embed, thumbnail=True)
         for s in rankings[:15]:
             i = s["rank"]
             medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"**{i}.**"
@@ -4810,6 +4860,7 @@ class HelpView(View):
             ), inline=False)
 
         embed.set_footer(text="⚜️ Majestic Dominion | May the Crown guide your path")
+        apply_branding(embed, thumbnail=True)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
@@ -4842,7 +4893,7 @@ async def member_command(interaction: discord.Interaction):
     if power > 0:
         embed.add_field(name="💪 Your Power", value=f"{rank_info[1]} — **{power}/100**", inline=False)
 
-    embed.set_thumbnail(url=interaction.user.display_avatar.url)
+    embed.set_thumbnail(url=get_bot_logo() or interaction.user.display_avatar.url)
     embed.set_footer(text="⚜️ Majestic Dominion | Long live the Crown")
     await interaction.response.send_message(embed=embed, view=view)
     await log_action(interaction.guild, "📋 /member", f"{interaction.user.mention} opened **Member Panel**")
@@ -4890,6 +4941,7 @@ async def leader_command(interaction: discord.Interaction):
         embed.add_field(name="💰 Bounty Alert!", value=f"**+{bounty['points']}** Glory Points bounty on your kingdom!", inline=False)
 
     embed.set_footer(text="⚜️ Majestic Dominion | Lead with honor, reign with glory")
+    apply_branding(embed, thumbnail=True)
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
     await log_action(interaction.guild, "📋 /leader", f"{interaction.user.mention} opened **Leader Panel** for **{sr.name}**")
 
@@ -4911,6 +4963,7 @@ async def mod_command(interaction: discord.Interaction):
         f"💰 {len(squad_data.get('bounties', {}))} bounties"
     ), inline=False)
     embed.set_footer(text="⚜️ Majestic Dominion | The Council sees all")
+    apply_branding(embed, thumbnail=True)
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
     await log_action(interaction.guild, "📋 /mod", f"{interaction.user.mention} opened **Moderator Panel**")
 
@@ -5206,6 +5259,19 @@ async def on_ready():
         daily_pulse_task.start()
     if not bot_commands_cleanup_task.is_running():
         bot_commands_cleanup_task.start()
+
+    # Set bot avatar to Majestic Dominion logo (once)
+    if os.path.exists(LOGO_TRANSPARENT):
+        try:
+            if not squad_data.get("_avatar_set"):
+                with open(LOGO_TRANSPARENT, "rb") as f:
+                    await bot.user.edit(avatar=f.read())
+                squad_data["_avatar_set"] = True
+                save_data(squad_data)
+                print("👑 Bot avatar set to Majestic Dominion logo!")
+        except Exception as e:
+            print(f"⚠️ Could not set avatar: {e}")
+
     print(f"✅ Logged in as {bot.user}")
     print(f"⚜️ Majestic Dominion Bot is online! The Crown watches over all.")
     for guild in bot.guilds:
