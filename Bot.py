@@ -1819,6 +1819,22 @@ async def announce_event(guild, embed, content=None):
     """Post any live event to #『🏆』war-results."""
     apply_branding(embed, thumbnail=True, author=True)
     channel = discord.utils.get(guild.text_channels, name=ANNOUNCE_CHANNEL_NAME)
+
+
+async def announce_major(guild, embed, content=None):
+    """Post a major event with the dark logo banner."""
+    apply_branding(embed, thumbnail=False, author=True)
+    channel = discord.utils.get(guild.text_channels, name=ANNOUNCE_CHANNEL_NAME)
+    if channel:
+        try:
+            if os.path.exists(LOGO_DARK):
+                file = discord.File(LOGO_DARK, filename="banner.png")
+                embed.set_image(url="attachment://banner.png")
+                await channel.send(content=content, embed=embed, file=file)
+            else:
+                await channel.send(content=content, embed=embed)
+        except:
+            pass
     if channel:
         try:
             await channel.send(content=content, embed=embed)
@@ -1993,10 +2009,16 @@ async def daily_pulse_task():
                 ch_text += f"{emoji} {c['challenger']} vs {c['challenged']}{sched}\n"
             embed.add_field(name="🎯 Open Challenges", value=ch_text, inline=True)
 
-        embed.set_footer(text=f"📅 {now.strftime('%A, %B %d, %Y')} | ⚜️ Majestic Realm Pulse")
+        embed.set_footer(text=f"📅 {now.strftime('%A, %B %d, %Y')} | ⚜️ Majestic Dominion")
+        apply_branding(embed, thumbnail=False, author=True)
 
         try:
-            await channel.send(embed=embed)
+            if os.path.exists(LOGO_DARK):
+                file = discord.File(LOGO_DARK, filename="banner.png")
+                embed.set_image(url="attachment://banner.png")
+                await channel.send(embed=embed, file=file)
+            else:
+                await channel.send(embed=embed)
         except:
             pass
 
@@ -2627,7 +2649,7 @@ class ScheduleDateModal(Modal, title="📅 Schedule Match Date"):
         if r2: mentions.append(r2.mention)
         mention_text = " ".join(mentions) if mentions else ""
 
-        await announce_event(guild, pub_embed, content=f"📅 {mention_text} — Your match is scheduled!" if mention_text else None)
+        await announce_major(guild, pub_embed, content=f"📅 {mention_text} — Your match is scheduled!" if mention_text else None)
         await log_action(guild, "📅 Match Scheduled",
             f"{interaction.user.mention} scheduled **{challenge['challenger']}** vs **{challenge['challenged']}** for **{date_str}**" +
             (f" | Notes: {notes}" if notes else ""))
@@ -2780,8 +2802,13 @@ class AnnouncementModal(Modal, title="📢 Royal Announcement"):
         mention_text = majestic_role.mention if majestic_role else f"@{MAJESTIC_ROLE_NAME}"
 
         try:
-            # Send main announcement
-            await ch.send(content=f"📢 {mention_text}", embed=embed)
+            # Send main announcement — use dark logo as banner if no images
+            if not image_urls and os.path.exists(LOGO_DARK):
+                file = discord.File(LOGO_DARK, filename="banner.png")
+                embed.set_image(url="attachment://banner.png")
+                await ch.send(content=f"📢 {mention_text}", embed=embed, file=file)
+            else:
+                await ch.send(content=f"📢 {mention_text}", embed=embed)
 
             # Send additional images as separate messages
             for img_url in image_urls[1:]:
@@ -2987,44 +3014,59 @@ def build_bot_guide_embeds():
 
 
 async def setup_bot_commands_channel(guild):
-    """Post the permanent guide in the bot commands channel (once)."""
+    """Post the permanent guide in the bot commands channel. Re-posts if any part is missing."""
     channel = discord.utils.get(guild.text_channels, name=BOT_COMMANDS_CHANNEL_NAME)
     if not channel:
         return
 
+    # Check if guide is intact — look for bot's messages with embeds
+    guide_intact = False
     stored_id = squad_data.get(BOT_GUIDE_POSTED_KEY)
-
-    # Check if guide message still exists
     if stored_id:
         try:
             msg = await channel.fetch_message(int(stored_id))
-            if msg:
-                return  # Guide already exists
-        except (discord.NotFound, discord.HTTPException, ValueError):
-            pass  # Message gone, re-post
+            if msg and msg.author == bot.user:
+                guide_intact = True
+        except:
+            pass
 
-    # Post the guide
+    if guide_intact:
+        return  # Guide exists, skip
+
+    # Guide missing or deleted — clear old bot messages and re-post
+    try:
+        async for message in channel.history(limit=50):
+            if message.author == bot.user:
+                try:
+                    await message.delete()
+                except:
+                    pass
+    except:
+        pass
+
+    # Build and brand all guide embeds
     embeds = build_bot_guide_embeds()
-    # Brand all guide embeds
     for e in embeds:
         apply_branding(e, thumbnail=True)
 
     try:
-        # Send dark logo as banner first
+        # 1. Send dark logo as banner
         files = []
         if os.path.exists(LOGO_DARK):
             files.append(discord.File(LOGO_DARK, filename="majestic_dominion.png"))
 
-        first_msg = await channel.send(
+        banner_msg = await channel.send(
             content="👑 **WELCOME TO THE MAJESTIC DOMINION** 👑\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
             files=files
         )
 
-        # Send embeds (max 10 per message)
-        await channel.send(embeds=embeds[:5])
+        # 2. Send guide embeds
+        guide_msg = await channel.send(embeds=embeds[:5])
 
-        squad_data[BOT_GUIDE_POSTED_KEY] = str(first_msg.id)
+        # Store the GUIDE message ID (the one we check on restart)
+        squad_data[BOT_GUIDE_POSTED_KEY] = str(guide_msg.id)
         save_data(squad_data)
+        print(f"👑 Bot guide posted in #{BOT_COMMANDS_CHANNEL_NAME}")
     except Exception as e:
         print(f"⚠️ Could not post guide: {e}")
 
@@ -3048,11 +3090,9 @@ async def bot_commands_cleanup_task():
         try:
             deleted_count = 0
             async for message in channel.history(limit=200):
-                # Keep the guide messages (posted by the bot)
-                if str(message.id) == stored_id:
-                    continue  # Keep the banner/logo
-                if message.author == bot.user and message.embeds:
-                    continue  # Keep bot's guide embeds
+                # Keep ALL bot messages (banner + guide)
+                if message.author == bot.user:
+                    continue
                 try:
                     await message.delete()
                     deleted_count += 1
@@ -3165,9 +3205,15 @@ async def weekly_digest_task():
             embed.add_field(name="💰 Active Bounties", value=b_text, inline=False)
 
         embed.set_footer(text="⚜️ Majestic Dominion | Royal Chronicle | Published every Sunday")
+        apply_branding(embed, thumbnail=False, author=True)
 
         try:
-            await channel.send(embed=embed)
+            if os.path.exists(LOGO_DARK):
+                file = discord.File(LOGO_DARK, filename="banner.png")
+                embed.set_image(url="attachment://banner.png")
+                await channel.send(embed=embed, file=file)
+            else:
+                await channel.send(embed=embed)
         except:
             pass
 
@@ -3419,10 +3465,11 @@ class MemberPanelView(View):
     @discord.ui.button(label="Browse Kingdoms", style=discord.ButtonStyle.primary, emoji="🏰", row=0)
     async def browse_btn(self, interaction: discord.Interaction, button: Button):
         embed = discord.Embed(
-        title="🏰 Kingdom Explorer",
-        description="Select a kingdom from the menu below to browse its profile.",
-        color=ROYAL_GOLD
-    )
+            title="🏰 Kingdom Explorer",
+            description="*Select a kingdom from the royal archives to inspect:*",
+            color=ROYAL_GOLD
+        )
+        apply_branding(embed, thumbnail=True)
         view = SquadSelectorView(purpose="browse")
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
         await log_action(interaction.guild, "🏰 Browse", f"{interaction.user.mention} opened **Kingdom Explorer**")
@@ -4031,7 +4078,7 @@ class AwardTitleDetailsModal(Modal, title="🏆 Award Championship Title"):
             pub.add_field(name="👑 Championship!", value=f"Total Championships: **{squad_info['championship_wins']}**", inline=False)
             pub.description += "\n\n🎉 *All hail the champions of the Dominion!*"
         pub.set_footer(text="⚜️ Majestic Dominion | Glory to the victors!")
-        await announce_event(interaction.guild, pub)
+        await announce_major(interaction.guild, pub)
 
 
 # --- Delete Match: Select from recent matches ---
@@ -4164,8 +4211,8 @@ class AddSquadModal(Modal, title="🏰 Create New Kingdom"):
                 description=f"**{tag} {name}** has been founded!\n\n*A new banner unfurls in the Majestic Dominion. Will they conquer or crumble?*",
                 color=ROYAL_GREEN
             )
-            pub.set_footer(text=f"Founded by {interaction.user.display_name} | ⚜️ The realm grows!")
-            await announce_event(interaction.guild, pub)
+            pub.set_footer(text=f"Founded by {interaction.user.display_name} | ⚜️ Majestic Dominion")
+            await announce_major(interaction.guild, pub)
 
         except discord.Forbidden:
             await interaction.followup.send("❌ Bot lacks permission to create roles. Check bot role hierarchy!", ephemeral=True)
@@ -4272,7 +4319,7 @@ class RemoveConfirmView(View):
                 color=ROYAL_RED
             )
             pub.set_footer(text="⚜️ Majestic Dominion | The Crown remembers.")
-            await announce_event(interaction.guild, pub)
+            await announce_major(interaction.guild, pub)
         except Exception as e:
             await interaction.response.edit_message(content=f"❌ Error: {e}", embed=None, view=None)
 
@@ -4296,7 +4343,7 @@ class RemoveConfirmView(View):
                 color=ROYAL_RED
             )
             pub.set_footer(text="⚜️ Majestic Dominion | The Crown remembers.")
-            await announce_event(interaction.guild, pub)
+            await announce_major(interaction.guild, pub)
         except Exception as e:
             await interaction.response.edit_message(content=f"❌ Error: {e}", embed=None, view=None)
 
@@ -4542,8 +4589,8 @@ class EditSquadModal(Modal, title="✏️ Edit Kingdom"):
                     description=f"**{self.old_name}** is now known as **{SQUADS.get(actual_name, '?')} {actual_name}**!\n\n*The royal scribes rewrite the chronicles — a new chapter begins.*",
                     color=ROYAL_PURPLE
                 )
-                pub.set_footer(text="⚜️ The chronicles have been rewritten.")
-                await announce_event(guild, pub)
+                pub.set_footer(text="⚜️ Majestic Dominion | The chronicles have been rewritten.")
+                await announce_major(guild, pub)
 
         except discord.Forbidden:
             await interaction.followup.send("❌ Bot lacks permission to edit roles. Check bot role hierarchy!", ephemeral=True)
