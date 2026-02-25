@@ -3019,30 +3019,29 @@ async def setup_bot_commands_channel(guild):
     if not channel:
         return
 
-    # Check if guide is intact — look for bot's messages with embeds
-    guide_intact = False
-    stored_id = squad_data.get(BOT_GUIDE_POSTED_KEY)
-    if stored_id:
-        try:
-            msg = await channel.fetch_message(int(stored_id))
-            if msg and msg.author == bot.user:
-                guide_intact = True
-        except:
-            pass
-
-    if guide_intact:
-        return  # Guide exists, skip
-
-    # Guide missing or deleted — clear old bot messages and re-post
+    # Check if guide is intact — we need BOTH the banner AND the guide embeds
+    bot_messages = []
     try:
         async for message in channel.history(limit=50):
             if message.author == bot.user:
-                try:
-                    await message.delete()
-                except:
-                    pass
+                bot_messages.append(message)
     except:
         pass
+
+    # We need exactly 2 bot messages (banner + guide embeds)
+    # If anything is missing or partial, wipe and re-post
+    if len(bot_messages) >= 2:
+        has_banner = any(m.attachments or m.content.startswith("👑") for m in bot_messages)
+        has_guide = any(m.embeds and len(m.embeds) >= 3 for m in bot_messages)
+        if has_banner and has_guide:
+            return  # Guide fully intact, skip
+
+    # Guide missing or partial — clear ALL old bot messages and re-post fresh
+    for msg in bot_messages:
+        try:
+            await msg.delete()
+        except:
+            pass
 
     # Build and brand all guide embeds
     embeds = build_bot_guide_embeds()
@@ -3063,8 +3062,9 @@ async def setup_bot_commands_channel(guild):
         # 2. Send guide embeds
         guide_msg = await channel.send(embeds=embeds[:5])
 
-        # Store the GUIDE message ID (the one we check on restart)
+        # Store both IDs
         squad_data[BOT_GUIDE_POSTED_KEY] = str(guide_msg.id)
+        squad_data["bot_guide_banner_id"] = str(banner_msg.id)
         save_data(squad_data)
         print(f"👑 Bot guide posted in #{BOT_COMMANDS_CHANNEL_NAME}")
     except Exception as e:
@@ -4861,6 +4861,7 @@ class HelpView(View):
                 "`/mod` — Moderator panel (matches & titles)\n"
                 "`/profile @user` — View anyone's profile\n"
                 "`/profiles` — Royal Census of registered warriors (council only)\n"
+                "`/guide` — Re-post the bot guide in commands channel (council only)\n"
                 "`/restore` — Restore data from backup (mod only)\n"
                 "`/help` — This help menu"
             ), inline=False)
@@ -5168,6 +5169,49 @@ class CensusPageView(View):
         )
 
 
+@bot.tree.command(name="guide", description="📖 Re-post the bot guide in the commands channel (Moderator only)")
+async def guide_command(interaction: discord.Interaction):
+    if not is_moderator(interaction.user):
+        await interaction.response.send_message("❌ Only the **Royal Council** may use this.", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    channel = discord.utils.get(interaction.guild.text_channels, name=BOT_COMMANDS_CHANNEL_NAME)
+    if not channel:
+        await interaction.followup.send(f"❌ Channel `{BOT_COMMANDS_CHANNEL_NAME}` not found.", ephemeral=True)
+        return
+
+    # Delete all bot messages in the channel first
+    try:
+        async for message in channel.history(limit=50):
+            if message.author == bot.user:
+                try:
+                    await message.delete()
+                except:
+                    pass
+    except:
+        pass
+
+    # Clear stored IDs so setup re-posts
+    squad_data.pop(BOT_GUIDE_POSTED_KEY, None)
+    squad_data.pop("bot_guide_banner_id", None)
+    save_data(squad_data)
+
+    # Re-post
+    await setup_bot_commands_channel(interaction.guild)
+
+    await interaction.followup.send(
+        embed=discord.Embed(
+            title="✅ Guide Re-posted!",
+            description=f"The bot guide has been refreshed in {channel.mention}.",
+            color=ROYAL_GREEN
+        ),
+        ephemeral=True
+    )
+    await log_action(interaction.guild, "📖 /guide", f"{interaction.user.mention} re-posted the **Bot Guide**")
+
+
 @bot.tree.command(name="help", description="📜 Open the Royal Codex of the Dominion")
 async def help_command(interaction: discord.Interaction):
     view = HelpView()
@@ -5182,6 +5226,7 @@ async def help_command(interaction: discord.Interaction):
         "`/mod` — Moderator panel (matches & titles)\n"
         "`/profile @user` — View anyone's profile\n"
         "`/profiles` — Royal Census (council only)\n"
+                "`/guide` — Re-post bot guide (council only)\n"
         "`/restore` — Restore data from backup (mod only)\n"
         "`/help` — This menu"
     ), inline=False)
