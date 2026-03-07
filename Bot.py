@@ -64,6 +64,7 @@ DEFAULT_SQUADS = {
     "Ethereal": "ÆTH",
     "浪 Ronin'": "DVNA",
     "Death Dose": "DD•",
+    "Blight": "᚛",
 }
 
 DEFAULT_GUEST_ROLES = {
@@ -95,6 +96,7 @@ DEFAULT_GUEST_ROLES = {
     "asgard warriors": "Asguard.Warriors_guest",
     "Manschaft": "Manschaft_guest",
     "Death Dose": "death.dose_guest",
+    "Blight": "blight.guest_role"
 }
 
 # LIVE dicts — populated from data file on startup, NOT hardcoded
