@@ -18,7 +18,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 # -------------------- CONFIG --------------------
 LEADER_ROLE_NAME = "LEADER"
-MODERATOR_ROLE_NAME = "MODERATOR"
+MODERATOR_ROLE_NAME = "KNIGHTS"
 
 # CRITICAL: Use persistent volume for data storage
 DATA_DIR = os.getenv("DATA_DIR", "/data")
