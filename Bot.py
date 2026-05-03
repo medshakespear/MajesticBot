@@ -3018,6 +3018,62 @@ def build_bot_guide_embeds():
         inline=False
     )
     embeds.append(e4)
+    # ── Events Page (new page 5 — push "Stay Connected" to page 6) ──
+    e_events = discord.Embed(
+        title="🎪 THE MAJESTIC ARENA — `/events`",
+        description="*Compete, register, and claim glory in official Dominion events.*",
+        color=ROYAL_GOLD,
+    )
+    e_events.add_field(
+        name="🔍 Browsing Events",
+        value=(
+            "Type `/events` to open the **Arena Board**.\n"
+            "Select any event from the dropdown to see full details, rules, and the registration button."
+        ),
+        inline=False,
+    )
+    e_events.add_field(
+        name="📝 How to Register",
+        value=(
+            "**👤 Solo events** — click **Register** and confirm.\n"
+            "**👥 Small teams (2v2, 3v3…)** — the leader registers and lists teammates.\n"
+            "**👑 5v5 events** — only **Kingdom Leaders** can register.\n"
+            "The bot will use your squad's existing main roster automatically.\n\n"
+            "⚠️ Duplicate registrations are blocked — one entry per player per event."
+        ),
+        inline=False,
+    )
+    e_events.add_field(
+        name="📊 Event Lifecycle",
+        value=(
+            "🟢 **Open** — Registration active, anyone can join\n"
+            "⚔️ **Ongoing** — Event is live, registration closed\n"
+            "🔴 **Closed** — Event finished\n\n"
+            "Announcements for start, close, and bracket draws are posted in **『🏆』war-results**."
+        ),
+        inline=False,
+    )
+    e_events.add_field(
+        name="🎲 Randomization (Moderator Feature)",
+        value=(
+            "Mods can enable:\n"
+            "• **Random Teams** — shuffle solo registrants into balanced teams\n"
+            "• **Random Bracket** — generate a single-elimination draw\n\n"
+            "Results are announced publicly when generated."
+        ),
+        inline=False,
+    )
+    e_events.add_field(
+        name="🛡️ For Moderators",
+        value=(
+            "Use `/mod` → **🎪 Events** to:\n"
+            "➕ Create · ✏️ Edit · 🗑️ Delete · ▶️ Start · ⏹️ Close\n"
+            "📋 View registrations · 🎲 Generate teams/brackets"
+        ),
+        inline=False,
+    )
+    embeds.append(e_events)
+    # ── end of new events page ──
 
     # Page 5: What to Watch
     e5 = discord.Embed(
@@ -3098,7 +3154,7 @@ async def setup_bot_commands_channel(guild):
         )
 
         # 2. Send guide embeds
-        guide_msg = await channel.send(embeds=embeds[:5])
+        guide_msg = await channel.send(embeds=embeds)
 
         # Store both IDs
         squad_data[BOT_GUIDE_POSTED_KEY] = str(guide_msg.id)
@@ -6191,10 +6247,91 @@ async def help_command(interaction: discord.Interaction):
         "`/restore` — Restore data from backup (mod only)\n"
         "`/help` — This menu"
     ), inline=False)
+    embed.add_field(
+            name="🎪 Events",
+            value=(
+                "`/events` — Browse and register for all upcoming events\n"
+                "• **Solo events** — click Register and confirm\n"
+                "• **Small team events** (2v2, 3v3) — leader registers and adds teammates\n"
+                "• **5v5 events** — only squad **Leaders** can register (uses the existing squad system)\n"
+                "• Mods manage events from `/mod` → **🎪 Events**"
+            ),
+            inline=False,
+        )
     embed.set_footer(text="⚜️ Majestic Dominion")
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
     await log_action(interaction.guild, "📜 /help", f"{interaction.user.mention} opened **Help Menu**")
+    
+@bot.tree.command(name="events", description="🎪 Browse and register for upcoming Majestic events")
+async def events_command(interaction: discord.Interaction):
+    all_events = get_all_events()
 
+    # Show open/ongoing first; fall back to all if nothing active
+    visible = [e for e in all_events if e["status"] != "closed"]
+    if not visible:
+        visible = all_events  # show closed ones so the board is never empty
+
+    if not visible:
+        embed = discord.Embed(
+            title="🎪 Majestic Arena — No Events Yet",
+            description=(
+                "*The arena is quiet... for now.*\n\n"
+                "⚔️ Check back soon — the Crown will announce the next battle!"
+            ),
+            color=ROYAL_GOLD,
+        )
+        apply_branding(embed, thumbnail=True)
+        await interaction.response.send_message(embed=embed)
+        return
+
+    per_page = 4
+    total_pages = max(1, (len(visible) + per_page - 1) // per_page)
+    first_chunk = visible[:per_page]
+
+    embed = discord.Embed(
+        title="🎪 Majestic Arena — Upcoming Events",
+        description=(
+            "*The Crown's arena is open! Select an event below to view details or register.*\n"
+            f"**{len(visible)}** event(s) available"
+        ),
+        color=ROYAL_GOLD,
+    )
+    apply_branding(embed, thumbnail=True)
+
+    # Inline preview cards for the first page
+    status_icons = {"open": "🟢", "ongoing": "⚔️", "closed": "🔴"}
+    type_icons   = {"tournament": "🏆", "fun": "🎉", "custom": "⚙️"}
+    mode_icons   = {"solo": "👤", "team": "👥"}
+    for ev in first_chunk:
+        si  = status_icons.get(ev["status"], "⚪")
+        ti  = type_icons.get(ev["type"], "🎪")
+        mi  = mode_icons.get(ev["mode"], "")
+        ts  = (f"{ev['team_size']}v{ev['team_size']}"
+               if ev["mode"] == "team" and ev["team_size"] > 1 else "Solo")
+        reg = len(ev.get("registrations", []))
+        mx  = f"/{ev['max_teams']}" if ev.get("max_teams") else ""
+        embed.add_field(
+            name=f"{ti} {ev['name']}",
+            value=(
+                f"{si} **{ev['status'].upper()}** | {mi} {ts}\n"
+                f"📅 {ev['date']}\n"
+                f"👥 {reg}{mx} registered\n"
+                f"*{ev['description'][:80]}{'...' if len(ev['description']) > 80 else ''}*"
+            ),
+            inline=False,
+        )
+
+    embed.set_footer(
+        text=f"⚜️ Page 1/{total_pages} | Use the dropdown to open any event"
+    )
+
+    view = EventsListView(visible, page=0, author_id=interaction.user.id)
+    await interaction.response.send_message(embed=embed, view=view)
+    await log_action(
+        interaction.guild,
+        "🎪 /events",
+        f"{interaction.user.mention} opened the **Events Board**",
+    )
 
 @bot.tree.command(name="restore", description="💾 Restore the royal archives from a backup scroll")
 @app_commands.describe(backup="The backup JSON file to restore")
