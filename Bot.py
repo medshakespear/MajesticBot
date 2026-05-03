@@ -18,7 +18,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 # -------------------- CONFIG --------------------
 LEADER_ROLE_NAME = "LEADER"
-MODERATOR_ROLE_NAME = "KNIGHTS"
+MODERATOR_ROLE_NAME = "MODERATOR"
 
 # CRITICAL: Use persistent volume for data storage
 DATA_DIR = os.getenv("DATA_DIR", "/data")
@@ -64,7 +64,6 @@ DEFAULT_SQUADS = {
     "Ethereal": "ÆTH",
     "浪 Ronin'": "DVNA",
     "Death Dose": "DD•",
-    "Blight": "᚛",
 }
 
 DEFAULT_GUEST_ROLES = {
@@ -96,7 +95,6 @@ DEFAULT_GUEST_ROLES = {
     "asgard warriors": "Asguard.Warriors_guest",
     "Manschaft": "Manschaft_guest",
     "Death Dose": "death.dose_guest",
-    "Blight": "blight.guest_role"
 }
 
 # LIVE dicts — populated from data file on startup, NOT hardcoded
@@ -117,7 +115,7 @@ LOG_CHANNEL_NAME = "『🕹️』bot-logs"
 ANNOUNCE_CHANNEL_NAME = "『🏆』war-results"
 NEWS_CHANNEL_NAME = "『📢』𝐀𝐧𝐧𝐨𝐮𝐧𝐜𝐞𝐦𝐞𝐧𝐭𝐬"
 TOURNAMENT_CHANNEL_NAME = "『🗞️』𝐓𝐨𝐮𝐫𝐧𝐚𝐦𝐞𝐧𝐭-𝐍𝐞𝐰𝐬"
-BOT_COMMANDS_CHANNEL_NAME = "『👑』majestic-𝐁𝐨𝐭-𝐂𝐨𝐦𝐦𝐚𝐧𝐝𝐬"
+BOT_COMMANDS_CHANNEL_NAME = "『👑』Majestic 𝐁𝐨𝐭-𝐂𝐨𝐦𝐦𝐚𝐧𝐝𝐬"
 MAJESTIC_ROLE_NAME = "MAJESTIC"
 BOT_GUIDE_POSTED_KEY = "bot_guide_message_id"
 
@@ -3154,6 +3152,923 @@ async def before_cleanup():
 
 
 # =====================================================================
+#                         EVENTS SYSTEM
+# =====================================================================
+
+def get_all_events():
+    if "events" not in squad_data:
+        squad_data["events"] = []
+    return squad_data["events"]
+
+def get_event_by_id(eid):
+    for e in get_all_events():
+        if e["id"] == eid:
+            return e
+    return None
+
+def is_registered(event, user_id):
+    uid = str(user_id)
+    for reg in event.get("registrations", []):
+        if event["mode"] == "solo":
+            if reg.get("player_id") == uid:
+                return True
+        else:
+            if reg.get("leader_id") == uid or uid in reg.get("members", []):
+                return True
+    return False
+
+def format_event_date(date_str):
+    return date_str  # Stored as human-readable string from mod input
+
+def build_event_list_embed(events, page, total_pages):
+    status_icons = {"open": "🟢", "ongoing": "⚔️", "closed": "🔴"}
+    type_icons   = {"tournament": "🏆", "fun": "🎉", "custom": "⚙️"}
+    mode_icons   = {"solo": "👤", "team": "👥"}
+    embed = discord.Embed(
+        title="🎪 Events — Majestic Dominion",
+        description="*Register for events and compete for the Crown's glory!*",
+        color=ROYAL_GOLD
+    )
+    if not events:
+        embed.description = "*No upcoming events right now. Stay tuned!*"
+    for ev in events:
+        si = status_icons.get(ev["status"], "⚪")
+        ti = type_icons.get(ev["type"], "🎪")
+        mi = mode_icons.get(ev["mode"], "")
+        ts = f"{ev['team_size']}v{ev['team_size']}" if ev["mode"] == "team" and ev["team_size"] > 1 else "Solo"
+        reg_count = len(ev.get("registrations", []))
+        max_str = f"/{ev['max_teams']}" if ev.get("max_teams") else ""
+        desc_short = ev["description"][:80] + ("..." if len(ev["description"]) > 80 else "")
+        value = (
+            f"{ti} **{ev['type'].title()}** | {mi} **{ts}**\n"
+            f"📅 {ev['date']}\n"
+            f"👥 {reg_count}{max_str} registered | {si} **{ev['status'].upper()}**\n"
+            f"*{desc_short}*"
+        )
+        embed.add_field(name=f"🎪 {ev['name']}", value=value, inline=False)
+    embed.set_footer(text=f"⚜️ Majestic Dominion | Page {page}/{total_pages} | Select an event below")
+    apply_branding(embed, thumbnail=True)
+    return embed
+
+def build_event_detail_embed(event, guild=None):
+    status_colors = {"open": ROYAL_GREEN, "ongoing": ROYAL_PURPLE, "closed": 0x555555}
+    status_labels = {"open": "🟢 OPEN — Registration Active", "ongoing": "⚔️ ONGOING", "closed": "🔴 CLOSED"}
+    type_labels   = {"tournament": "🏆 Tournament", "fun": "🎉 Fun Event", "custom": "⚙️ Custom"}
+    reg_count = len(event.get("registrations", []))
+    max_str = f" / {event['max_teams']} max" if event.get("max_teams") else ""
+    ts = f"{event['team_size']}v{event['team_size']}" if event["mode"] == "team" and event["team_size"] > 1 else "Solo"
+    rand_parts = []
+    if event.get("randomize_teams"):   rand_parts.append("Teams")
+    if event.get("randomize_brackets"): rand_parts.append("Bracket")
+    rand_str = " & ".join(rand_parts) if rand_parts else "Off"
+
+    embed = discord.Embed(
+        title=f"🎪 {event['name']}",
+        description=event.get("description", ""),
+        color=status_colors.get(event["status"], ROYAL_GOLD)
+    )
+    embed.add_field(name="📋 Type",      value=type_labels.get(event["type"], event["type"].title()), inline=True)
+    embed.add_field(name="⚔️ Format",   value=ts,                                                     inline=True)
+    embed.add_field(name="📊 Status",   value=status_labels.get(event["status"], event["status"]),    inline=True)
+    embed.add_field(name="📅 Date",     value=event["date"],                                          inline=True)
+    embed.add_field(name="👥 Registered", value=f"{reg_count}{max_str}",                              inline=True)
+    embed.add_field(name="🎲 Randomize", value=rand_str,                                              inline=True)
+    if event.get("rules"):
+        embed.add_field(name="📜 Rules", value=event["rules"][:1024], inline=False)
+    if event["mode"] == "team" and event.get("team_size", 5) >= 5:
+        embed.add_field(name="⚠️ Registration",
+            value="*This is a **5v5** event. Only **Kingdom Leaders** may register their squad using the existing squad system.*",
+            inline=False)
+    elif event["mode"] == "team":
+        embed.add_field(name="ℹ️ Registration",
+            value=f"*Form a team of **{event['team_size']}**. The team leader registers and adds teammates.*",
+            inline=False)
+    embed.set_footer(text=f"⚜️ Event ID: {event['id']} | Majestic Dominion")
+    apply_branding(embed, thumbnail=True)
+    return embed
+
+def build_registrations_embed(event, page, guild):
+    regs = event.get("registrations", [])
+    per_page = 8
+    total_pages = max(1, (len(regs) + per_page - 1) // per_page)
+    page = max(1, min(page, total_pages))
+    chunk = regs[(page - 1) * per_page : page * per_page]
+    embed = discord.Embed(
+        title=f"📋 Registrations — {event['name']}",
+        description=f"**{len(regs)}** registered" + (f" / {event['max_teams']} max" if event.get("max_teams") else ""),
+        color=ROYAL_PURPLE
+    )
+    if not regs:
+        embed.description = "*No registrations yet.*"
+        apply_branding(embed, thumbnail=True)
+        return embed, 1
+    for i, reg in enumerate(chunk, start=(page - 1) * per_page + 1):
+        if event["mode"] == "solo":
+            pid = reg.get("player_id")
+            m = guild.get_member(int(pid)) if pid and guild else None
+            name = m.mention if m else reg.get("player_name", pid)
+            embed.add_field(name=f"#{i}", value=f"{name}\n📅 {reg.get('registered_at','')[:10]}", inline=True)
+        else:
+            lid = reg.get("leader_id")
+            lm = guild.get_member(int(lid)) if lid and guild else None
+            leader_name = lm.display_name if lm else reg.get("team_name", lid)
+            members = reg.get("members", [])
+            m_names = []
+            for mid in members:
+                mm = guild.get_member(int(mid)) if guild else None
+                m_names.append(mm.display_name if mm else f"<@{mid}>")
+            val = (f"👑 {leader_name}" +
+                   (f"\n{', '.join(m_names)}" if m_names else "") +
+                   f"\n📅 {reg.get('registered_at','')[:10]}")
+            if len(val) > 1024: val = val[:1020] + "..."
+            tname = reg.get("team_name", f"Team {i}")
+            embed.add_field(name=f"#{i} {tname}", value=val, inline=False)
+    embed.set_footer(text=f"⚜️ Page {page}/{total_pages} | Majestic Dominion")
+    apply_branding(embed, thumbnail=True)
+    return embed, total_pages
+
+def build_event_manager_embed():
+    events = get_all_events()
+    open_ev   = sum(1 for e in events if e["status"] == "open")
+    ongoing   = sum(1 for e in events if e["status"] == "ongoing")
+    closed    = sum(1 for e in events if e["status"] == "closed")
+    embed = discord.Embed(
+        title="🎪 Event Manager",
+        description=f"**{open_ev}** open · **{ongoing}** ongoing · **{closed}** closed",
+        color=ROYAL_GOLD
+    )
+    if events:
+        for ev in events[-6:]:
+            si = {"open": "🟢", "ongoing": "⚔️", "closed": "🔴"}.get(ev["status"], "⚪")
+            rc = len(ev.get("registrations", []))
+            ts = f"{ev['team_size']}v{ev['team_size']}" if ev["mode"] == "team" and ev["team_size"] > 1 else "Solo"
+            embed.add_field(
+                name=f"{si} {ev['name']}",
+                value=f"{ev['type'].title()} | {ts} | 👥 {rc} | 📅 {ev['date']}",
+                inline=False
+            )
+    else:
+        embed.add_field(name="📭 No Events", value="Create your first event!", inline=False)
+    embed.set_footer(text="⚜️ Majestic Dominion | Event Manager")
+    apply_branding(embed, thumbnail=True)
+    return embed
+
+def generate_bracket(event):
+    regs = list(event.get("registrations", []))
+    if not regs:
+        return []
+    random.shuffle(regs)
+    def name_of(reg):
+        return reg.get("team_name") or reg.get("player_name") or f"Player {reg.get('player_id','?')}"
+    teams = [name_of(r) for r in regs]
+    size = 1
+    while size < len(teams): size *= 2
+    teams += ["BYE"] * (size - len(teams))
+    rounds = []
+    current = teams
+    while len(current) > 1:
+        matches = [(current[i], current[i+1]) for i in range(0, len(current), 2)]
+        rounds.append(matches)
+        current = [m[0] if m[1] == "BYE" else "TBD" for m in matches]
+    return rounds
+
+def generate_random_teams(event):
+    regs = list(event.get("registrations", []))
+    ts = max(2, event.get("team_size", 2))
+    random.shuffle(regs)
+    return [regs[i:i+ts] for i in range(0, len(regs), ts)]
+
+def build_bracket_embed(event):
+    bracket = event.get("bracket") or generate_bracket(event)
+    round_names = ["Finals", "Semi-Finals", "Quarter-Finals", "Round of 16",
+                   "Round of 32", "Round of 64", "Round of 128"]
+    total = len(bracket)
+    embed = discord.Embed(
+        title=f"🏆 Draw / Bracket — {event['name']}",
+        description="*Single Elimination — may the best sovereign prevail!*",
+        color=ROYAL_GOLD
+    )
+    for ri, matches in enumerate(bracket):
+        rname_idx = total - 1 - ri
+        rname = round_names[rname_idx] if rname_idx < len(round_names) else f"Round {ri+1}"
+        lines = [f"`Match {mi+1}:` **{t1}** vs **{t2}**" for mi,(t1,t2) in enumerate(matches)]
+        val = "\n".join(lines)
+        if len(val) > 1024: val = val[:1020] + "..."
+        embed.add_field(name=f"⚔️ {rname}", value=val, inline=False)
+    embed.set_footer(text=f"⚜️ Majestic Dominion | Event ID: {event['id']}")
+    apply_branding(embed, thumbnail=True)
+    return embed
+
+
+# ---- Public /events Views ----
+
+class EventsListView(View):
+    def __init__(self, all_events, page=0, author_id=None):
+        super().__init__(timeout=180)
+        visible = [e for e in all_events if e["status"] != "closed"] or all_events
+        self.all_events = visible
+        self.page = page
+        self.author_id = author_id
+        self.per_page = 4
+        self.total_pages = max(1, (len(self.all_events) + self.per_page - 1) // self.per_page)
+        self._refresh()
+
+    def _page_events(self):
+        s = self.page * self.per_page
+        return self.all_events[s:s + self.per_page]
+
+    def _refresh(self):
+        # Remove old selects
+        for item in list(self.children):
+            if isinstance(item, Select):
+                self.remove_item(item)
+        self.prev_btn.disabled = self.page <= 0
+        self.next_btn.disabled = self.page >= self.total_pages - 1
+        evs = self._page_events()
+        if evs:
+            opts = [discord.SelectOption(
+                label=ev["name"][:100], value=ev["id"], emoji="🎪",
+                description=f"{ev['type'].title()} · {ev['status'].upper()} · {ev['date'][:30]}"
+            ) for ev in evs]
+            sel = Select(placeholder="🎪 Select an event to view details...", options=opts, row=0)
+            sel.callback = self._on_select
+            self.add_item(sel)
+
+    async def _on_select(self, interaction):
+        eid = interaction.data["values"][0]
+        event = get_event_by_id(eid)
+        if not event:
+            return await interaction.response.send_message("❌ Event not found.", ephemeral=True)
+        embed = build_event_detail_embed(event, interaction.guild)
+        view = EventDetailView(event, interaction.user.id)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+    @discord.ui.button(label="◀ Prev", style=discord.ButtonStyle.secondary, row=1)
+    async def prev_btn(self, interaction, button):
+        self.page = max(0, self.page - 1)
+        self._refresh()
+        await interaction.response.edit_message(
+            embed=build_event_list_embed(self._page_events(), self.page + 1, self.total_pages), view=self)
+
+    @discord.ui.button(label="▶ Next", style=discord.ButtonStyle.secondary, row=1)
+    async def next_btn(self, interaction, button):
+        self.page = min(self.total_pages - 1, self.page + 1)
+        self._refresh()
+        await interaction.response.edit_message(
+            embed=build_event_list_embed(self._page_events(), self.page + 1, self.total_pages), view=self)
+
+
+class EventDetailView(View):
+    def __init__(self, event, user_id):
+        super().__init__(timeout=180)
+        self.event = event
+        self.user_id = user_id
+        already = is_registered(event, user_id)
+        is_open = event["status"] == "open"
+        self.register_btn.disabled = already or not is_open
+        if already:
+            self.register_btn.label = "✅ Already Registered"
+            self.register_btn.style = discord.ButtonStyle.success
+        elif not is_open:
+            self.register_btn.label = f"🔒 {event['status'].upper()}"
+
+    @discord.ui.button(label="📝 Register", style=discord.ButtonStyle.success, row=0)
+    async def register_btn(self, interaction, button):
+        await handle_registration(interaction, self.event)
+
+
+async def handle_registration(interaction, event):
+    if event["status"] != "open":
+        return await interaction.response.send_message("❌ This event is not open for registration.", ephemeral=True)
+    if is_registered(event, interaction.user.id):
+        return await interaction.response.send_message("❌ You are already registered.", ephemeral=True)
+    if event.get("max_teams") and len(event["registrations"]) >= event["max_teams"]:
+        return await interaction.response.send_message("❌ This event is full.", ephemeral=True)
+
+    if event["mode"] == "solo":
+        await interaction.response.send_modal(SoloRegisterModal(event))
+    elif event["mode"] == "team":
+        ts = event.get("team_size", 5)
+        if ts >= 5:
+            await handle_squad_5v5_registration(interaction, event)
+        else:
+            await interaction.response.send_modal(SmallTeamRegisterModal(event))
+    else:
+        await interaction.response.send_message("❌ Unknown event mode.", ephemeral=True)
+
+
+# --- Solo Registration ---
+class SoloRegisterModal(Modal, title="📝 Confirm Solo Registration"):
+    confirm = TextInput(label='Type "CONFIRM" to register', placeholder="CONFIRM",
+                        required=True, max_length=10)
+    def __init__(self, event):
+        super().__init__()
+        self.event = event
+
+    async def on_submit(self, interaction):
+        if self.confirm.value.strip().upper() != "CONFIRM":
+            return await interaction.response.send_message("❌ Cancelled.", ephemeral=True)
+        if is_registered(self.event, interaction.user.id):
+            return await interaction.response.send_message("❌ Already registered.", ephemeral=True)
+        self.event["registrations"].append({
+            "player_id": str(interaction.user.id),
+            "player_name": interaction.user.display_name,
+            "registered_at": datetime.utcnow().isoformat()
+        })
+        save_data(squad_data)
+        embed = discord.Embed(
+            title="✅ You're Registered!",
+            description=f"You have joined **{self.event['name']}**!\n📅 {self.event['date']}",
+            color=ROYAL_GREEN
+        )
+        apply_branding(embed, thumbnail=True)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await log_action(interaction.guild, "📝 Solo Registration",
+            f"{interaction.user.mention} registered for **{self.event['name']}**")
+
+
+# --- Small Team Registration (2v2, 3v3 etc.) ---
+class SmallTeamRegisterModal(Modal, title="📝 Team Registration"):
+    team_name = TextInput(label="Team Name", placeholder="Enter your team name",
+                          required=True, max_length=50)
+    members_raw = TextInput(
+        label="Teammates (user IDs or @mentions, comma-sep)",
+        placeholder="@Player1, @Player2 — leave blank if solo for now",
+        style=discord.TextStyle.paragraph, required=False, max_length=500
+    )
+    def __init__(self, event):
+        super().__init__()
+        self.event = event
+        ts = event.get("team_size", 2)
+        self.members_raw.label = f"Teammates (need {ts-1} more, user IDs or @mentions)"
+
+    async def on_submit(self, interaction):
+        ts = self.event.get("team_size", 2)
+        tname = self.team_name.value.strip()
+        member_ids = [str(interaction.user.id)]
+        raw = self.members_raw.value.strip() if self.members_raw.value else ""
+        if raw:
+            for part in raw.replace(",", " ").split():
+                p = part.strip().strip("<@!>").strip()
+                if p.isdigit() and p not in member_ids:
+                    member_ids.append(p)
+
+        # Duplicate check
+        for mid in member_ids:
+            if is_registered(self.event, mid):
+                m = interaction.guild.get_member(int(mid))
+                name = m.display_name if m else mid
+                return await interaction.response.send_message(
+                    f"❌ **{name}** is already registered for this event.", ephemeral=True)
+
+        self.event["registrations"].append({
+            "team_name": tname,
+            "leader_id": str(interaction.user.id),
+            "members": member_ids[1:],
+            "registered_at": datetime.utcnow().isoformat()
+        })
+        save_data(squad_data)
+        filled = len(member_ids)
+        embed = discord.Embed(
+            title="✅ Team Registered!",
+            description=f"**{tname}** is registered for **{self.event['name']}**!\n📅 {self.event['date']}\n👥 {filled}/{ts} members",
+            color=ROYAL_GREEN
+        )
+        if filled < ts:
+            embed.add_field(name="⚠️ Incomplete Roster",
+                value=f"Your team has {filled}/{ts} members. A moderator can update your roster if needed.", inline=False)
+        apply_branding(embed, thumbnail=True)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await log_action(interaction.guild, "📝 Team Registration",
+            f"{interaction.user.mention} registered team **{tname}** for **{self.event['name']}**")
+
+
+# --- 5v5 Squad Registration ---
+async def handle_squad_5v5_registration(interaction, event):
+    uid = str(interaction.user.id)
+    leader_squads = [
+        sq for sq, sd in squad_data.get("squads", {}).items()
+        if uid in [str(l) for l in sd.get("leaders", [])]
+    ]
+    if not leader_squads:
+        return await interaction.response.send_message(
+            "❌ Only **Kingdom Leaders** can register for 5v5 events.\n"
+            "You are not listed as a leader of any kingdom.", ephemeral=True)
+    embed = discord.Embed(
+        title="👑 5v5 Kingdom Registration",
+        description=f"Select your kingdom to enter **{event['name']}**.\nYour **main roster** will be used automatically.",
+        color=ROYAL_GOLD
+    )
+    apply_branding(embed, thumbnail=True)
+    await interaction.response.send_message(embed=embed, view=SquadRegisterSelectView(event, leader_squads), ephemeral=True)
+
+
+class SquadRegisterSelectView(View):
+    def __init__(self, event, leader_squads):
+        super().__init__(timeout=180)
+        self.event = event
+        opts = [
+            discord.SelectOption(label=sq, value=sq, emoji=SQUADS.get(sq, "⚔️"),
+                                 description=f"Register {sq} as your 5v5 team")
+            for sq in leader_squads[:25]
+        ]
+        sel = Select(placeholder="👑 Select your kingdom...", options=opts)
+        sel.callback = self._selected
+        self.add_item(sel)
+
+    async def _selected(self, interaction):
+        sq_name = interaction.data["values"][0]
+        sq_info = squad_data["squads"].get(sq_name)
+        if not sq_info:
+            return await interaction.response.send_message("❌ Kingdom not found.", ephemeral=True)
+
+        # Check already registered
+        for reg in self.event.get("registrations", []):
+            if reg.get("team_name") == sq_name:
+                return await interaction.response.send_message(
+                    f"❌ **{sq_name}** is already registered for this event.", ephemeral=True)
+
+        mains = [str(m) for m in sq_info.get("mains", [])]
+        leader_id = str(interaction.user.id)
+        other_members = [m for m in mains if m != leader_id]
+
+        self.event["registrations"].append({
+            "team_name": sq_name,
+            "leader_id": leader_id,
+            "members": other_members,
+            "squad_ref": sq_name,
+            "registered_at": datetime.utcnow().isoformat()
+        })
+        save_data(squad_data)
+
+        tag = SQUADS.get(sq_name, "⚔️")
+        embed = discord.Embed(
+            title="✅ Kingdom Registered!",
+            description=(f"{tag} **{sq_name}** has entered **{self.event['name']}**!\n"
+                         f"📅 {self.event['date']}\n"
+                         f"👥 {len(mains)} warriors on your main roster"),
+            color=ROYAL_GREEN
+        )
+        apply_branding(embed, thumbnail=True)
+        await interaction.response.edit_message(embed=embed, view=None)
+
+        pub = discord.Embed(
+            title="⚔️ A KINGDOM ENTERS THE ARENA!",
+            description=f"{tag} **{sq_name}** has registered for **{self.event['name']}**!\n\n*The battlefield grows more crowded...*",
+            color=ROYAL_GOLD
+        )
+        await announce_event(interaction.guild, pub)
+        await log_action(interaction.guild, "📝 5v5 Registration",
+            f"{interaction.user.mention} registered {tag} **{sq_name}** for **{self.event['name']}**")
+
+
+# ---- Mod Panel: Event Manager ----
+
+class EventManagerView(View):
+    def __init__(self):
+        super().__init__(timeout=300)
+
+    @discord.ui.button(label="Create", emoji="➕", style=discord.ButtonStyle.success, row=0)
+    async def create_btn(self, interaction, button):
+        await interaction.response.send_modal(CreateEventModal())
+
+    @discord.ui.button(label="Edit", emoji="✏️", style=discord.ButtonStyle.primary, row=0)
+    async def edit_btn(self, interaction, button):
+        evs = get_all_events()
+        if not evs:
+            return await interaction.response.send_message("❌ No events to edit.", ephemeral=True)
+        embed = discord.Embed(title="✏️ Edit Event", description="Select an event:", color=ROYAL_GOLD)
+        apply_branding(embed, thumbnail=True)
+        await interaction.response.send_message(embed=embed, view=EventActionSelectView(evs, "edit", interaction.user.id), ephemeral=True)
+
+    @discord.ui.button(label="Delete", emoji="🗑️", style=discord.ButtonStyle.danger, row=0)
+    async def delete_btn(self, interaction, button):
+        evs = get_all_events()
+        if not evs:
+            return await interaction.response.send_message("❌ No events to delete.", ephemeral=True)
+        embed = discord.Embed(title="🗑️ Delete Event", description="Select an event:", color=ROYAL_RED)
+        apply_branding(embed, thumbnail=True)
+        await interaction.response.send_message(embed=embed, view=EventActionSelectView(evs, "delete", interaction.user.id), ephemeral=True)
+
+    @discord.ui.button(label="Registrations", emoji="📋", style=discord.ButtonStyle.secondary, row=1)
+    async def regs_btn(self, interaction, button):
+        evs = get_all_events()
+        if not evs:
+            return await interaction.response.send_message("❌ No events.", ephemeral=True)
+        embed = discord.Embed(title="📋 View Registrations", description="Select an event:", color=ROYAL_PURPLE)
+        apply_branding(embed, thumbnail=True)
+        await interaction.response.send_message(embed=embed, view=EventActionSelectView(evs, "regs", interaction.user.id), ephemeral=True)
+
+    @discord.ui.button(label="Start", emoji="▶️", style=discord.ButtonStyle.success, row=1)
+    async def start_btn(self, interaction, button):
+        evs = [e for e in get_all_events() if e["status"] == "open"]
+        if not evs:
+            return await interaction.response.send_message("❌ No open events to start.", ephemeral=True)
+        embed = discord.Embed(title="▶️ Start Event", description="Select an event to start:", color=ROYAL_GREEN)
+        apply_branding(embed, thumbnail=True)
+        await interaction.response.send_message(embed=embed, view=EventActionSelectView(evs, "start", interaction.user.id), ephemeral=True)
+
+    @discord.ui.button(label="Close", emoji="⏹️", style=discord.ButtonStyle.danger, row=1)
+    async def close_btn(self, interaction, button):
+        evs = [e for e in get_all_events() if e["status"] == "ongoing"]
+        if not evs:
+            return await interaction.response.send_message("❌ No ongoing events to close.", ephemeral=True)
+        embed = discord.Embed(title="⏹️ Close Event", description="Select an event to close:", color=ROYAL_RED)
+        apply_branding(embed, thumbnail=True)
+        await interaction.response.send_message(embed=embed, view=EventActionSelectView(evs, "close", interaction.user.id), ephemeral=True)
+
+    @discord.ui.button(label="Randomize", emoji="🎲", style=discord.ButtonStyle.primary, row=2)
+    async def random_btn(self, interaction, button):
+        evs = [e for e in get_all_events() if e.get("randomize_teams") or e.get("randomize_brackets")]
+        if not evs:
+            return await interaction.response.send_message("❌ No events with randomization enabled.", ephemeral=True)
+        embed = discord.Embed(title="🎲 Randomize", description="Select an event:", color=ROYAL_PURPLE)
+        apply_branding(embed, thumbnail=True)
+        await interaction.response.send_message(embed=embed, view=EventActionSelectView(evs, "randomize", interaction.user.id), ephemeral=True)
+
+    @discord.ui.button(label="🔄 Refresh", style=discord.ButtonStyle.secondary, row=2)
+    async def refresh_btn(self, interaction, button):
+        await interaction.response.edit_message(embed=build_event_manager_embed(), view=EventManagerView())
+
+
+class EventActionSelectView(View):
+    def __init__(self, events, action, author_id):
+        super().__init__(timeout=180)
+        self.action = action
+        self.author_id = author_id
+        opts = [
+            discord.SelectOption(
+                label=ev["name"][:100], value=ev["id"], emoji="🎪",
+                description=f"{ev['type'].title()} · {ev['status']} · {len(ev.get('registrations',[]))} registered"
+            ) for ev in events[:25]
+        ]
+        sel = Select(placeholder="🎪 Select an event...", options=opts)
+        sel.callback = self._selected
+        self.add_item(sel)
+
+    async def _selected(self, interaction):
+        if interaction.user.id != self.author_id:
+            return await interaction.response.send_message("❌ Not your session.", ephemeral=True)
+        eid = interaction.data["values"][0]
+        event = get_event_by_id(eid)
+        if not event:
+            return await interaction.response.send_message("❌ Event not found.", ephemeral=True)
+
+        if self.action == "edit":
+            await interaction.response.send_modal(EditEventModal(event))
+
+        elif self.action == "delete":
+            embed = discord.Embed(
+                title=f"🗑️ Delete '{event['name']}'?",
+                description=f"This will permanently delete the event and **{len(event.get('registrations',[]))}** registrations.",
+                color=ROYAL_RED
+            )
+            apply_branding(embed, thumbnail=True)
+            await interaction.response.send_message(embed=embed, view=ConfirmDeleteEventView(event), ephemeral=True)
+
+        elif self.action == "regs":
+            embed, total_pages = build_registrations_embed(event, 1, interaction.guild)
+            await interaction.response.send_message(
+                embed=embed, view=RegistrationsPageView(event, 1, interaction.user.id, interaction.guild), ephemeral=True)
+
+        elif self.action == "start":
+            event["status"] = "ongoing"
+            save_data(squad_data)
+            embed = discord.Embed(title="▶️ Event Started!", description=f"**{event['name']}** is now **ONGOING**.", color=ROYAL_GREEN)
+            apply_branding(embed, thumbnail=True)
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            pub = discord.Embed(
+                title="⚔️ THE ARENA IS OPEN!",
+                description=f"**{event['name']}** has officially begun!\n\n*{event.get('description','')}*\n\n⚔️ Let the battle commence!",
+                color=ROYAL_GOLD
+            )
+            await announce_major(interaction.guild, pub)
+            await log_action(interaction.guild, "▶️ Event Started", f"{interaction.user.mention} started **{event['name']}**")
+
+        elif self.action == "close":
+            event["status"] = "closed"
+            save_data(squad_data)
+            embed = discord.Embed(title="⏹️ Event Closed!", description=f"**{event['name']}** is now **CLOSED**.", color=ROYAL_RED)
+            apply_branding(embed, thumbnail=True)
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            pub = discord.Embed(
+                title="🏁 EVENT CONCLUDED!",
+                description=f"**{event['name']}** has concluded!\n\n*Glory and honour to all who competed in the Dominion's arena!*",
+                color=ROYAL_PURPLE
+            )
+            await announce_major(interaction.guild, pub)
+            await log_action(interaction.guild, "⏹️ Event Closed", f"{interaction.user.mention} closed **{event['name']}**")
+
+        elif self.action == "randomize":
+            embed = discord.Embed(
+                title=f"🎲 Randomize — {event['name']}",
+                description="Choose what to randomize:",
+                color=ROYAL_PURPLE
+            )
+            apply_branding(embed, thumbnail=True)
+            await interaction.response.send_message(embed=embed, view=RandomizeView(event, interaction.user.id), ephemeral=True)
+
+
+class ConfirmDeleteEventView(View):
+    def __init__(self, event):
+        super().__init__(timeout=60)
+        self.event = event
+
+    @discord.ui.button(label="✅ Confirm Delete", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction, button):
+        squad_data["events"] = [e for e in get_all_events() if e["id"] != self.event["id"]]
+        save_data(squad_data)
+        embed = discord.Embed(title="🗑️ Event Deleted", description=f"**{self.event['name']}** removed.", color=ROYAL_RED)
+        apply_branding(embed, thumbnail=True)
+        await interaction.response.edit_message(embed=embed, view=None)
+        await log_action(interaction.guild, "🗑️ Event Deleted", f"{interaction.user.mention} deleted **{self.event['name']}**")
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction, button):
+        await interaction.response.edit_message(content="❌ Cancelled.", embed=None, view=None)
+
+
+class RegistrationsPageView(View):
+    def __init__(self, event, page, author_id, guild):
+        super().__init__(timeout=180)
+        self.event = event
+        self.page = page
+        self.author_id = author_id
+        self.guild = guild
+        _, self.total_pages = build_registrations_embed(event, page, guild)
+        self.prev_btn.disabled = page <= 1
+        self.next_btn.disabled = page >= self.total_pages
+
+    @discord.ui.button(label="◀ Prev", style=discord.ButtonStyle.secondary)
+    async def prev_btn(self, interaction, button):
+        if interaction.user.id != self.author_id: return
+        self.page = max(1, self.page - 1)
+        self.prev_btn.disabled = self.page <= 1
+        self.next_btn.disabled = self.page >= self.total_pages
+        embed, _ = build_registrations_embed(self.event, self.page, self.guild)
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    @discord.ui.button(label="▶ Next", style=discord.ButtonStyle.secondary)
+    async def next_btn(self, interaction, button):
+        if interaction.user.id != self.author_id: return
+        self.page = min(self.total_pages, self.page + 1)
+        self.prev_btn.disabled = self.page <= 1
+        self.next_btn.disabled = self.page >= self.total_pages
+        embed, _ = build_registrations_embed(self.event, self.page, self.guild)
+        await interaction.response.edit_message(embed=embed, view=self)
+
+
+class RandomizeView(View):
+    def __init__(self, event, author_id):
+        super().__init__(timeout=180)
+        self.event = event
+        self.author_id = author_id
+        self.teams_btn.disabled  = not (event.get("randomize_teams") and event["mode"] == "solo")
+        self.bracket_btn.disabled = not event.get("randomize_brackets")
+
+    @discord.ui.button(label="🎲 Random Teams (Solo → Teams)", style=discord.ButtonStyle.primary)
+    async def teams_btn(self, interaction, button):
+        if interaction.user.id != self.author_id: return
+        teams = generate_random_teams(self.event)
+        embed = discord.Embed(
+            title=f"🎲 Random Teams — {self.event['name']}",
+            description=f"Generated **{len(teams)}** random teams:",
+            color=ROYAL_PURPLE
+        )
+        for i, team in enumerate(teams, 1):
+            names = [t.get("player_name", f"<@{t.get('player_id','?')}>") for t in team]
+            embed.add_field(name=f"🛡️ Team {i}", value=" · ".join(names)[:1024], inline=False)
+        apply_branding(embed, thumbnail=True)
+        await interaction.response.edit_message(embed=embed, view=None)
+        pub = embed.copy()
+        await announce_event(interaction.guild, pub)
+        await log_action(interaction.guild, "🎲 Random Teams",
+            f"{interaction.user.mention} generated random teams for **{self.event['name']}**")
+
+    @discord.ui.button(label="🏆 Generate Draw / Bracket", style=discord.ButtonStyle.success)
+    async def bracket_btn(self, interaction, button):
+        if interaction.user.id != self.author_id: return
+        self.event["bracket"] = generate_bracket(self.event)
+        save_data(squad_data)
+        embed = build_bracket_embed(self.event)
+        await interaction.response.edit_message(embed=embed, view=None)
+        pub = build_bracket_embed(self.event)
+        await announce_major(interaction.guild, pub)
+        await log_action(interaction.guild, "🏆 Bracket Generated",
+            f"{interaction.user.mention} generated bracket for **{self.event['name']}**")
+
+
+# --- Create Event: 2-step (Modal → Settings View) ---
+
+class CreateEventModal(Modal, title="🎪 New Event — Basic Info"):
+    ev_name = TextInput(label="Event Name",         placeholder="e.g., Season 3 Championship",          required=True,  max_length=100)
+    ev_desc = TextInput(label="Description",         placeholder="Short overview of the event",           required=True,  max_length=500, style=discord.TextStyle.paragraph)
+    ev_rules = TextInput(label="Rules (optional)",   placeholder="Special rules, format notes, etc.",    required=False, max_length=1000, style=discord.TextStyle.paragraph)
+    ev_date  = TextInput(label="Date & Time (UTC)",  placeholder="e.g., May 20, 2026 at 18:00 UTC",      required=True,  max_length=100)
+    ev_max   = TextInput(label="Max Teams/Players (0 = unlimited)", placeholder="e.g., 16",              required=False, max_length=5)
+
+    async def on_submit(self, interaction):
+        max_val = None
+        if self.ev_max.value.strip() not in ("", "0"):
+            try:
+                max_val = int(self.ev_max.value.strip())
+            except:
+                pass
+        partial = {
+            "name":     self.ev_name.value.strip(),
+            "description": self.ev_desc.value.strip(),
+            "rules":    self.ev_rules.value.strip(),
+            "date":     self.ev_date.value.strip(),
+            "max_teams": max_val,
+        }
+        embed = discord.Embed(
+            title=f"🎪 Configuring: {partial['name']}",
+            description="Choose the event type, format, and options below:",
+            color=ROYAL_GOLD
+        )
+        apply_branding(embed, thumbnail=True)
+        await interaction.response.send_message(embed=embed, view=CreateEventSettingsView(partial, interaction.user.id), ephemeral=True)
+
+
+class CreateEventSettingsView(View):
+    def __init__(self, partial, author_id):
+        super().__init__(timeout=300)
+        self.partial    = partial
+        self.author_id  = author_id
+        self.ev_type    = "tournament"
+        self.ev_mode    = "team"
+        self.team_size  = 5
+        self.rand_teams   = False
+        self.rand_bracket = False
+
+    def _embed(self):
+        ts_str = f"{self.team_size}v{self.team_size}" if self.ev_mode == "team" and self.team_size > 1 else "Solo"
+        note = "\n⚠️ *5v5: Leaders only — uses existing squads*" if self.ev_mode == "team" and self.team_size >= 5 else ""
+        embed = discord.Embed(title=f"🎪 New Event: {self.partial['name']}", color=ROYAL_GOLD)
+        embed.add_field(name="📋 Type",   value=f"**{self.ev_type.title()}**",   inline=True)
+        embed.add_field(name="⚔️ Format", value=f"**{ts_str}**{note}",           inline=True)
+        embed.add_field(name="👥 Mode",   value=f"**{self.ev_mode.title()}**",   inline=True)
+        embed.add_field(name="🎲 Random Teams",   value="✅" if self.rand_teams   else "❌", inline=True)
+        embed.add_field(name="🏆 Random Bracket", value="✅" if self.rand_bracket else "❌", inline=True)
+        embed.add_field(name="📅 Date",  value=self.partial["date"],             inline=True)
+        embed.add_field(name="📝 Desc",  value=self.partial["description"][:200], inline=False)
+        if self.partial.get("max_teams"):
+            embed.add_field(name="🔢 Max", value=str(self.partial["max_teams"]), inline=True)
+        embed.set_footer(text="⚜️ Configure then click ✅ Create Event")
+        apply_branding(embed, thumbnail=True)
+        return embed
+
+    # Type row
+    @discord.ui.button(label="🏆 Tournament", style=discord.ButtonStyle.primary, row=0)
+    async def t_tournament(self, i, b): self.ev_type = "tournament"; await i.response.edit_message(embed=self._embed(), view=self)
+    @discord.ui.button(label="🎉 Fun Event",  style=discord.ButtonStyle.primary, row=0)
+    async def t_fun(self, i, b):        self.ev_type = "fun";        await i.response.edit_message(embed=self._embed(), view=self)
+    @discord.ui.button(label="⚙️ Custom",     style=discord.ButtonStyle.primary, row=0)
+    async def t_custom(self, i, b):     self.ev_type = "custom";     await i.response.edit_message(embed=self._embed(), view=self)
+
+    # Team size select
+    @discord.ui.select(
+        placeholder="⚔️ Select team format...",
+        options=[
+            discord.SelectOption(label="Solo (individual)",  value="1", emoji="👤"),
+            discord.SelectOption(label="1v1",                value="11", emoji="⚔️"),
+            discord.SelectOption(label="2v2",                value="2",  emoji="👥"),
+            discord.SelectOption(label="3v3",                value="3",  emoji="🔱"),
+            discord.SelectOption(label="4v4",                value="4",  emoji="🏰"),
+            discord.SelectOption(label="5v5 (Leaders only)", value="5",  emoji="👑", description="Uses existing squads"),
+            discord.SelectOption(label="Custom size...",     value="0",  emoji="⚙️"),
+        ],
+        row=1
+    )
+    async def size_select(self, interaction, select):
+        if interaction.user.id != self.author_id: return
+        val = select.values[0]
+        if val == "0":
+            return await interaction.response.send_modal(CustomTeamSizeModal(self))
+        v = int(val)
+        if v == 1:
+            self.team_size = 1; self.ev_mode = "solo"
+        elif v == 11:
+            self.team_size = 1; self.ev_mode = "team"
+        else:
+            self.team_size = v; self.ev_mode = "team"
+        await interaction.response.edit_message(embed=self._embed(), view=self)
+
+    # Randomize toggles
+    @discord.ui.button(label="🎲 Toggle Random Teams",   style=discord.ButtonStyle.secondary, row=2)
+    async def tog_teams(self, i, b):
+        self.rand_teams = not self.rand_teams; await i.response.edit_message(embed=self._embed(), view=self)
+    @discord.ui.button(label="🏆 Toggle Random Bracket", style=discord.ButtonStyle.secondary, row=2)
+    async def tog_bracket(self, i, b):
+        self.rand_bracket = not self.rand_bracket; await i.response.edit_message(embed=self._embed(), view=self)
+
+    # Confirm / Cancel
+    @discord.ui.button(label="✅ Create Event", style=discord.ButtonStyle.success, row=3)
+    async def create_confirm(self, interaction, button):
+        if interaction.user.id != self.author_id: return
+        event_id = str(uuid.uuid4())[:8]
+        event = {
+            "id": event_id,
+            "name": self.partial["name"],
+            "type": self.ev_type,
+            "mode": self.ev_mode,
+            "team_size": self.team_size,
+            "max_teams": self.partial.get("max_teams"),
+            "date": self.partial["date"],
+            "description": self.partial["description"],
+            "rules": self.partial.get("rules", ""),
+            "status": "open",
+            "randomize_teams":    self.rand_teams,
+            "randomize_brackets": self.rand_bracket,
+            "registrations": [],
+            "bracket": None,
+            "created_by": str(interaction.user.id),
+            "created_at": datetime.utcnow().isoformat()
+        }
+        if "events" not in squad_data:
+            squad_data["events"] = []
+        squad_data["events"].append(event)
+        save_data(squad_data)
+
+        embed = discord.Embed(
+            title="✅ Event Created!",
+            description=f"**{event['name']}** is live and open for registration!\n`ID: {event_id}`",
+            color=ROYAL_GREEN
+        )
+        apply_branding(embed, thumbnail=True)
+        await interaction.response.edit_message(embed=embed, view=None)
+
+        ts_str = f"{self.team_size}v{self.team_size}" if self.ev_mode == "team" and self.team_size > 1 else "Solo"
+        type_icon = {"tournament": "🏆", "fun": "🎉", "custom": "⚙️"}.get(self.ev_type, "🎪")
+        pub = discord.Embed(
+            title="🎪 NEW EVENT ANNOUNCED!",
+            description=f"**{event['name']}** is now open for registration!\n\n*{event['description']}*",
+            color=ROYAL_GOLD
+        )
+        pub.add_field(name="📋 Type",    value=f"{type_icon} {event['type'].title()}", inline=True)
+        pub.add_field(name="⚔️ Format", value=ts_str,                                  inline=True)
+        pub.add_field(name="📅 Date",   value=event["date"],                            inline=True)
+        if event.get("rules"):
+            pub.add_field(name="📜 Rules", value=event["rules"][:512], inline=False)
+        pub.add_field(name="📝 How to Register", value="Use `/events` — select the event and click **Register**!", inline=False)
+        pub.set_footer(text=f"⚜️ Majestic Dominion | Event ID: {event_id}")
+        await announce_major(interaction.guild, pub)
+        await log_action(interaction.guild, "🎪 Event Created",
+            f"{interaction.user.mention} created **{event['name']}** ({event['type']}, {ts_str})")
+
+    @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.danger, row=3)
+    async def cancel_btn(self, interaction, button):
+        if interaction.user.id != self.author_id: return
+        await interaction.response.edit_message(content="❌ Event creation cancelled.", embed=None, view=None)
+
+
+class CustomTeamSizeModal(Modal, title="⚙️ Custom Team Size"):
+    size = TextInput(label="Players per team", placeholder="e.g., 6", required=True, max_length=3)
+    def __init__(self, parent):
+        super().__init__()
+        self.parent = parent
+    async def on_submit(self, interaction):
+        try:
+            v = int(self.size.value.strip())
+            if v < 1: raise ValueError
+            self.parent.team_size = v
+            self.parent.ev_mode = "solo" if v == 1 else "team"
+            await interaction.response.edit_message(embed=self.parent._embed(), view=self.parent)
+        except:
+            await interaction.response.send_message("❌ Enter a valid number.", ephemeral=True)
+
+
+class EditEventModal(Modal, title="✏️ Edit Event"):
+    def __init__(self, event):
+        super().__init__()
+        self.event = event
+        self.ev_name  = TextInput(label="Event Name",          default=event["name"],                 required=True,  max_length=100)
+        self.ev_desc  = TextInput(label="Description",          default=event.get("description",""),  required=True,  max_length=500, style=discord.TextStyle.paragraph)
+        self.ev_rules = TextInput(label="Rules",                default=event.get("rules",""),         required=False, max_length=1000, style=discord.TextStyle.paragraph)
+        self.ev_date  = TextInput(label="Date & Time",          default=event.get("date",""),          required=True,  max_length=100)
+        self.ev_status = TextInput(label="Status (open/ongoing/closed)", default=event.get("status","open"), required=True, max_length=10)
+        self.add_item(self.ev_name); self.add_item(self.ev_desc); self.add_item(self.ev_rules)
+        self.add_item(self.ev_date); self.add_item(self.ev_status)
+
+    async def on_submit(self, interaction):
+        status = self.ev_status.value.strip().lower()
+        if status not in ("open", "ongoing", "closed"):
+            return await interaction.response.send_message("❌ Status must be: open, ongoing, or closed", ephemeral=True)
+        self.event.update({
+            "name":        self.ev_name.value.strip(),
+            "description": self.ev_desc.value.strip(),
+            "rules":       self.ev_rules.value.strip(),
+            "date":        self.ev_date.value.strip(),
+            "status":      status,
+        })
+        save_data(squad_data)
+        embed = discord.Embed(title="✅ Event Updated!", description=f"**{self.event['name']}** has been updated.", color=ROYAL_GREEN)
+        apply_branding(embed, thumbnail=True)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await log_action(interaction.guild, "✏️ Event Edited", f"{interaction.user.mention} edited **{self.event['name']}**")
+
+
+# =====================================================================
 #                     WEEKLY DIGEST (Auto-post Sunday)
 # =====================================================================
 
@@ -4776,6 +5691,12 @@ class ModeratorPanelView(View):
         )
         await interaction.response.send_message(embed=embed, view=AnnouncementChannelView(), ephemeral=True)
         await log_action(interaction.guild, "📢 Announce", f"{interaction.user.mention} started **Royal Announcement**")
+
+    @discord.ui.button(label="Events", style=discord.ButtonStyle.primary, emoji="🎪", row=4)
+    async def events_btn(self, interaction: discord.Interaction, button: Button):
+        embed = build_event_manager_embed()
+        await interaction.response.send_message(embed=embed, view=EventManagerView(), ephemeral=True)
+        await log_action(interaction.guild, "🎪 Events", f"{interaction.user.mention} opened **Event Manager**")
 
 
 async def show_recent_matches(interaction, limit=10):
