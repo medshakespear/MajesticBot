@@ -5661,7 +5661,98 @@ def get_all_bracket_matches(event):
                 for m in rnd:
                     m2 = dict(m); m2["round_display"] = f"Bracket R{ri+1}"; matches.append(m2)
 
+    elif system in ("random_draw", "random_teams"):
+        for i, m in enumerate(bd.get("matches", [])):
+            m2 = dict(m)
+            m2["round_display"] = f"Match {i+1}"
+            matches.append(m2)
+
+    # random_pick and gather_group have no schedulable matches
+    elif system in ("random_pick", "gather_group"):
+        pass
+
     return matches
+
+
+def generate_random_draw(regs, shuffle=True):
+    """Randomly pair all registrations — no bracket, just who plays who."""
+    names = [get_reg_name(r) for r in regs]
+    if shuffle: random.shuffle(names)
+    matches = []
+    for i, mid in enumerate(range(0, len(names) - 1, 2), start=1):
+        matches.append({
+            "match_id": f"rd_{i}",
+            "team1": names[mid],
+            "team2": names[mid + 1]
+        })
+    if len(names) % 2 != 0:
+        matches.append({
+            "match_id": f"rd_{len(matches)+1}",
+            "team1": names[-1],
+            "team2": "BYE"
+        })
+    return {"system": "random_draw", "matches": matches}
+
+
+def generate_random_teams_from_solo(regs, team_size=2, shuffle=True):
+    """Form random teams from solo registrants, then pair the teams."""
+    names = [get_reg_name(r) for r in regs]
+    if shuffle: random.shuffle(names)
+    # Split into teams
+    teams = []
+    for i in range(0, len(names), team_size):
+        chunk = names[i:i + team_size]
+        teams.append(chunk)
+    # Name the teams
+    team_labels = [f"Team {i+1} ({' & '.join(t)})" for i, t in enumerate(teams)]
+    # Pair teams up for matches
+    matches = []
+    for i, mid_i in enumerate(range(0, len(team_labels) - 1, 2), start=1):
+        matches.append({
+            "match_id": f"rt_{i}",
+            "team1": team_labels[mid_i],
+            "team2": team_labels[mid_i + 1]
+        })
+    if len(team_labels) % 2 != 0:
+        matches.append({
+            "match_id": f"rt_{len(matches)+1}",
+            "team1": team_labels[-1],
+            "team2": "BYE"
+        })
+    return {
+        "system": "random_teams",
+        "teams": [{"label": label, "members": members}
+                  for label, members in zip(team_labels, teams)],
+        "matches": matches
+    }
+
+
+def generate_random_pick(regs, shuffle=True):
+    """Randomly select ONE player or team from all registrations (lottery)."""
+    entries = [get_reg_name(r) for r in regs]
+    if shuffle: random.shuffle(entries)
+    winner = random.choice(entries)
+    others = [e for e in entries if e != winner]
+    return {
+        "system": "random_pick",
+        "winner": winner,
+        "all_entries": entries,
+        "others": others,
+    }
+
+
+def generate_gather_group(regs, size, shuffle=True):
+    """Randomly pick exactly `size` participants and group them together."""
+    all_names = [get_reg_name(r) for r in regs]
+    if shuffle: random.shuffle(all_names)
+    selected  = all_names[:size]
+    remaining = all_names[size:]
+    return {
+        "system": "gather_group",
+        "size": size,
+        "selected": selected,
+        "remaining": remaining,
+    }
 
 def get_unscheduled_matches(event):
     scheduled_ids = {s["match_id"] for s in event.get("schedule", [])}
@@ -5812,10 +5903,27 @@ def build_bracket_embed(event):
         apply_branding(embed, thumbnail=True)
         return embed
     system = bd.get("system","?")
-    sys_labels = {"single_elim":"Single Elimination","double_elim":"Double Elimination",
-                  "round_robin":"Round Robin","groups":"Group Stage","group_bracket":"Group Stage → Bracket"}
-    embed = discord.Embed(title=f"🏆 {sys_labels.get(system,'Bracket')} — {event['name']}",
-        description=f"*Generated bracket — may the best sovereign prevail!*", color=ROYAL_GOLD)
+    sys_labels = {
+        "single_elim":   "Single Elimination",
+        "double_elim":   "Double Elimination",
+        "round_robin":   "Round Robin",
+        "groups":        "Group Stage",
+        "group_bracket": "Group Stage → Bracket",
+        "random_draw":   "Random Draw",
+        "random_teams":  "Random Teams",
+        "random_pick":   "Random Pick",
+        "gather_group":  "Random Group",
+    }
+    draw_desc = {
+        "random_draw":  "*Random draw — who plays who. No bracket structure.*",
+        "random_teams": "*Random teams formed from registrants. Pairings shown below.*",
+        "random_pick":  "*One participant randomly selected from all registrations.*",
+        "gather_group": "*A random group of participants selected from registrations.*",
+    }
+    embed = discord.Embed(
+        title=f"{'🎲' if system in ('random_draw','random_teams','random_pick','gather_group') else '🏆'} {sys_labels.get(system,'Draw')} — {event['name']}",
+        description=draw_desc.get(system, "*Generated bracket — may the best sovereign prevail!*"),
+        color=ROYAL_GOLD)
 
     if system == "single_elim":
         round_names = ["Grand Final","Semi-Finals","Quarter-Finals","Round of 16","Round of 32","Round of 64"]
@@ -5862,6 +5970,57 @@ def build_bracket_embed(event):
             for ri, rnd in enumerate(rounds):
                 lines = [f"`{m['match_id']}` {m['team1']} vs {m['team2']}" for m in rnd]
                 embed.add_field(name=f"⚔️ Bracket R{ri+1}", value="\n".join(lines)[:1024], inline=False)
+
+    elif system == "random_draw":
+        matches = bd.get("matches", [])
+        real = [m for m in matches if m.get("team2") != "BYE"]
+        byes = [m for m in matches if m.get("team2") == "BYE"]
+        lines = [f"`{m['match_id']}` ⚔️ **{m['team1']}** vs **{m['team2']}**" for m in real]
+        for ci in range(0, len(lines), 10):
+            chunk = "\n".join(lines[ci:ci+10])[:1024]
+            embed.add_field(name=f"🎲 Matches {ci+1}–{min(ci+10,len(lines))}", value=chunk, inline=False)
+            if len(embed.fields) >= 20: break
+        if byes:
+            embed.add_field(name="🚪 BYE", value="\n".join(m["team1"] for m in byes), inline=False)
+
+    elif system == "random_teams":
+        teams = bd.get("teams", [])
+        team_lines = [f"🛡️ **{t['label'].split('(')[0].strip()}** — {' · '.join(t['members'])}" for t in teams]
+        for ci in range(0, len(team_lines), 5):
+            chunk = "\n".join(team_lines[ci:ci+5])[:1024]
+            embed.add_field(name=f"👥 Teams {ci+1}–{min(ci+5,len(team_lines))}", value=chunk, inline=False)
+            if len(embed.fields) >= 10: break
+        matches = bd.get("matches", [])
+        if matches:
+            real = [m for m in matches if m.get("team2") != "BYE"]
+            lines = [f"`{m['match_id']}` {m['team1'].split('(')[0].strip()} vs {m['team2'].split('(')[0].strip()}" for m in real]
+            embed.add_field(name="━━━━ Match Pairings ━━━━",
+                value="\n".join(lines)[:1024] or "—", inline=False)
+
+    elif system == "random_pick":
+        winner = bd.get("winner", "?")
+        others = bd.get("others", [])
+        embed.add_field(name="🎉 Selected!", value=f"### **{winner}**", inline=False)
+        if others:
+            embed.add_field(name=f"📋 All Entries ({len(bd.get('all_entries',[]))} total)",
+                value="\n".join(f"• {e}" for e in others[:20])[:1024]
+                      + (f"\n*...and {len(others)-20} more*" if len(others) > 20 else ""),
+                inline=False)
+
+    elif system == "gather_group":
+        selected  = bd.get("selected", [])
+        remaining = bd.get("remaining", [])
+        size      = bd.get("size", len(selected))
+        embed.add_field(
+            name=f"👥 Selected Group ({size} participants)",
+            value="\n".join(f"• **{m}**" for m in selected)[:1024] or "—",
+            inline=False)
+        if remaining:
+            embed.add_field(
+                name=f"📋 Not Selected ({len(remaining)})",
+                value="\n".join(f"• {m}" for m in remaining[:20])[:1024]
+                      + (f"\n*...and {len(remaining)-20} more*" if len(remaining) > 20 else ""),
+                inline=False)
 
     embed.set_footer(text=f"⚜️ Event ID: {event['id']} | Use /events to register")
     apply_branding(embed, thumbnail=True)
@@ -6403,97 +6562,218 @@ class RemoveRegistrantView(View):
 # ── Randomize view ─────────────────────────────────────────────────────
 
 class RandomizeView(View):
+    """
+    Row 0: Simple Draws  — just "who plays who", no structure
+    Row 1: Full Brackets — tournament structure (Single/Double Elim, Round Robin)
+    Row 2: Groups & management
+    """
     def __init__(self, event, author_id):
         super().__init__(timeout=180)
-        self.event = event; self.author_id = author_id
-        rm = event.get("randomize_groups", False)
-        rb = event.get("randomize_brackets", False)
-        self.groups_btn.disabled  = not rm
-        self.bracket_btn.disabled = not rb
-        self.rr_btn.disabled = event.get("tournament_system") != "round_robin"
-        self.de_btn.disabled = event.get("tournament_system") != "double_elim"
+        self.event = event
+        self.author_id = author_id
 
-    @discord.ui.button(label="🎲 Generate Groups", style=discord.ButtonStyle.primary, row=0)
-    async def groups_btn(self, interaction, button):
-        if interaction.user.id != self.author_id: return
-        await interaction.response.send_modal(GroupCountModal(self.event, interaction.user.id))
+    def _ok(self, i): return i.user.id == self.author_id
 
-    @discord.ui.button(label="🏆 Random Single-Elim Bracket", style=discord.ButtonStyle.success, row=0)
-    async def bracket_btn(self, interaction, button):
-        if interaction.user.id != self.author_id: return
-        regs = self.event.get("registrations", [])
-        if len(regs) < 2:
-            return await interaction.response.send_message("❌ Need at least 2 registrations.", ephemeral=True)
-        bd = generate_single_elim(regs)
-        self.event["bracket_data"] = bd; self.event["schedule"] = []
-        save_data(squad_data)
-        embed = build_bracket_embed(self.event)
-        await interaction.response.edit_message(embed=embed, view=None)
-        pub = build_bracket_embed(self.event)
-        await announce_major(interaction.guild, pub)
-        await log_action(interaction.guild, "🏆 Bracket Generated",
-            f"{interaction.user.mention} generated **single-elim bracket** for **{self.event['name']}**")
-
-    @discord.ui.button(label="⚔️ Double Elimination", style=discord.ButtonStyle.primary, row=1)
-    async def de_btn(self, interaction, button):
-        if interaction.user.id != self.author_id: return
-        regs = self.event.get("registrations", [])
-        if len(regs) < 2:
-            return await interaction.response.send_message("❌ Need at least 2 registrations.", ephemeral=True)
-        bd = generate_double_elim(regs)
-        self.event["bracket_data"] = bd; self.event["schedule"] = []
-        save_data(squad_data)
-        embed = build_bracket_embed(self.event)
-        await interaction.response.edit_message(embed=embed, view=None)
-        pub = build_bracket_embed(self.event)
-        await announce_major(interaction.guild, pub)
-        await log_action(interaction.guild, "⚔️ Double-Elim Generated",
-            f"{interaction.user.mention} generated **double elimination** for **{self.event['name']}**")
-
-    @discord.ui.button(label="🔄 Round Robin", style=discord.ButtonStyle.secondary, row=1)
-    async def rr_btn(self, interaction, button):
-        if interaction.user.id != self.author_id: return
-        regs = self.event.get("registrations", [])
-        if len(regs) < 2:
-            return await interaction.response.send_message("❌ Need at least 2 registrations.", ephemeral=True)
-        bd = generate_round_robin(regs)
-        self.event["bracket_data"] = bd; self.event["schedule"] = []
-        save_data(squad_data)
-        embed = build_bracket_embed(self.event)
-        await interaction.response.edit_message(embed=embed, view=None)
-        pub = build_bracket_embed(self.event)
-        await announce_major(interaction.guild, pub)
-        await log_action(interaction.guild, "🔄 Round Robin Generated",
-            f"{interaction.user.mention} generated **round robin** for **{self.event['name']}**")
-
-    @discord.ui.button(label="🎯 Advance Groups → Bracket", style=discord.ButtonStyle.success, row=2)
-    async def advance_btn(self, interaction, button):
-        if interaction.user.id != self.author_id: return
-        bd = self.event.get("bracket_data")
-        if not bd or bd.get("system") not in ("groups","group_bracket"):
-            return await interaction.response.send_message("❌ No group stage to advance.", ephemeral=True)
-        advance_groups_to_bracket(bd)
+    async def _gen(self, interaction, bd, label):
         self.event["bracket_data"] = bd
+        self.event["schedule"] = []
         save_data(squad_data)
         embed = build_bracket_embed(self.event)
         await interaction.response.edit_message(embed=embed, view=None)
-        pub = build_bracket_embed(self.event)
-        await announce_major(interaction.guild, pub)
-        await log_action(interaction.guild, "🎯 Groups Advanced",
-            f"{interaction.user.mention} advanced groups to bracket for **{self.event['name']}**")
+        await announce_major(interaction.guild, build_bracket_embed(self.event))
+        await log_action(interaction.guild, f"🎲 {label}",
+            f"{interaction.user.mention} generated **{label}** for **{self.event['name']}**")
 
-    @discord.ui.button(label="🔄 Regenerate / Clear", style=discord.ButtonStyle.danger, row=2)
+    # ── Row 0: Simple Draws (no bracket structure) ──────────────────────
+    @discord.ui.button(label="🎲 Random Draw", style=discord.ButtonStyle.success, row=0,
+        custom_id="rdraw")
+    async def draw_btn(self, interaction, button):
+        """Pair everyone randomly — simple list, no bracket."""
+        if not self._ok(interaction): return
+        regs = self.event.get("registrations", [])
+        if len(regs) < 2:
+            return await interaction.response.send_message("❌ Need at least 2 registrations.", ephemeral=True)
+        await self._gen(interaction, generate_random_draw(regs), "Random Draw")
+
+    @discord.ui.button(label="👥 Random Teams (from Solo)", style=discord.ButtonStyle.success, row=0,
+        custom_id="rteams")
+    async def teams_btn(self, interaction, button):
+        """Group solo registrants into random teams, then pair them."""
+        if not self._ok(interaction): return
+        if self.event.get("registration_mode") != "solo":
+            return await interaction.response.send_message(
+                "❌ Only available for **Solo** registration events.", ephemeral=True)
+        if len(self.event.get("registrations", [])) < 2:
+            return await interaction.response.send_message("❌ Need at least 2 registrations.", ephemeral=True)
+        await interaction.response.send_modal(RandomTeamSizeModal(self.event, self.author_id))
+
+    @discord.ui.button(label="🎯 Pick One (Lottery)", style=discord.ButtonStyle.success, row=0,
+        custom_id="rpick")
+    async def pick_btn(self, interaction, button):
+        """Randomly select ONE player or team — lottery style."""
+        if not self._ok(interaction): return
+        regs = self.event.get("registrations", [])
+        if len(regs) < 1:
+            return await interaction.response.send_message("❌ No registrations yet.", ephemeral=True)
+        await self._gen(interaction, generate_random_pick(regs), "Random Pick")
+
+    @discord.ui.button(label="👥 Gather Group (N players)", style=discord.ButtonStyle.success, row=0,
+        custom_id="rgather")
+    async def gather_btn(self, interaction, button):
+        """Randomly pick N participants and group them together."""
+        if not self._ok(interaction): return
+        if len(self.event.get("registrations", [])) < 2:
+            return await interaction.response.send_message("❌ Need at least 2 registrations.", ephemeral=True)
+        await interaction.response.send_modal(GatherGroupModal(self.event, self.author_id))
+
+    # ── Row 1: Bracket Systems ──────────────────────────────────────────
+    @discord.ui.button(label="🏆 Single Elimination", style=discord.ButtonStyle.primary, row=1,
+        custom_id="selim")
+    async def se_btn(self, interaction, button):
+        if not self._ok(interaction): return
+        regs = self.event.get("registrations", [])
+        if len(regs) < 2:
+            return await interaction.response.send_message("❌ Need at least 2.", ephemeral=True)
+        await self._gen(interaction, generate_single_elim(regs), "Single Elimination")
+
+    @discord.ui.button(label="⚔️ Double Elimination", style=discord.ButtonStyle.primary, row=1,
+        custom_id="delim")
+    async def de_btn(self, interaction, button):
+        if not self._ok(interaction): return
+        regs = self.event.get("registrations", [])
+        if len(regs) < 2:
+            return await interaction.response.send_message("❌ Need at least 2.", ephemeral=True)
+        await self._gen(interaction, generate_double_elim(regs), "Double Elimination")
+
+    @discord.ui.button(label="🔄 Round Robin", style=discord.ButtonStyle.secondary, row=1,
+        custom_id="rrobin")
+    async def rr_btn(self, interaction, button):
+        if not self._ok(interaction): return
+        regs = self.event.get("registrations", [])
+        if len(regs) < 2:
+            return await interaction.response.send_message("❌ Need at least 2.", ephemeral=True)
+        await self._gen(interaction, generate_round_robin(regs), "Round Robin")
+
+    # ── Row 2: Groups & Management ──────────────────────────────────────
+    @discord.ui.button(label="🎲 Random Groups", style=discord.ButtonStyle.primary, row=2,
+        custom_id="rgroups")
+    async def groups_btn(self, interaction, button):
+        if not self._ok(interaction): return
+        if len(self.event.get("registrations", [])) < 4:
+            return await interaction.response.send_message("❌ Need at least 4 registrations.", ephemeral=True)
+        await interaction.response.send_modal(GroupCountModal(self.event, self.author_id))
+
+    @discord.ui.button(label="🎯 Groups → Bracket", style=discord.ButtonStyle.success, row=2,
+        custom_id="gadvance")
+    async def advance_btn(self, interaction, button):
+        if not self._ok(interaction): return
+        bd = self.event.get("bracket_data")
+        if not bd or bd.get("system") not in ("groups", "group_bracket"):
+            return await interaction.response.send_message("❌ No group stage found.", ephemeral=True)
+        advance_groups_to_bracket(bd, bd.get("advances_per_group", 2))
+        await self._gen(interaction, bd, "Groups → Bracket")
+
+    @discord.ui.button(label="🗑️ Clear & Redo", style=discord.ButtonStyle.danger, row=2,
+        custom_id="gclear")
     async def clear_btn(self, interaction, button):
-        if interaction.user.id != self.author_id: return
-        self.event["bracket_data"] = None; self.event["schedule"] = []
+        if not self._ok(interaction): return
+        self.event["bracket_data"] = None
+        self.event["schedule"] = []
         save_data(squad_data)
-        await interaction.response.edit_message(content="✅ Bracket and schedule cleared.", embed=None, view=None)
-        await log_action(interaction.guild, "🔄 Bracket Cleared",
-            f"{interaction.user.mention} cleared bracket for **{self.event['name']}**")
+        desc = ("**Choose a draw type above:**\n\n"
+                "**Row 1 — Simple Draws** (no bracket)\n"
+                "🎲 **Random Draw** — pair everyone up randomly\n"
+                "👥 **Random Teams** — form teams from solo players then pair them\n\n"
+                "**Row 2 — Bracket Systems** (structured tournament)\n"
+                "🏆 Single Elim · ⚔️ Double Elim · 🔄 Round Robin\n\n"
+                "**Row 3 — Groups**\n"
+                "🎲 Random Groups · 🎯 Groups→Bracket")
+        embed = discord.Embed(title=f"🎲 Randomize — {self.event['name']}",
+            description=desc, color=ROYAL_PURPLE)
+        apply_branding(embed, thumbnail=True)
+        await interaction.response.edit_message(embed=embed, view=self)
+        await log_action(interaction.guild, "🗑️ Draw Cleared",
+            f"{interaction.user.mention} cleared draw for **{self.event['name']}**")
+
+
+class RandomTeamSizeModal(Modal, title="👥 Random Teams — Team Size"):
+    team_size = TextInput(label="Players per team",
+        placeholder="e.g., 2  →  2v2 teams,  3  →  3v3 teams",
+        required=True, max_length=2)
+    def __init__(self, event, author_id):
+        super().__init__(); self.event = event; self.author_id = author_id
+
+    async def on_submit(self, interaction):
+        try:
+            ts = int(self.team_size.value.strip())
+            if ts < 2: raise ValueError
+        except:
+            return await interaction.response.send_message("❌ Enter a valid team size ≥ 2.", ephemeral=True)
+        regs = self.event.get("registrations", [])
+        if len(regs) < ts:
+            return await interaction.response.send_message(
+                f"❌ Not enough registrations ({len(regs)}) for teams of {ts}.", ephemeral=True)
+        bd = generate_random_teams_from_solo(regs, team_size=ts)
+        self.event["bracket_data"] = bd
+        self.event["schedule"] = []
+        save_data(squad_data)
+        embed = build_bracket_embed(self.event)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await announce_major(interaction.guild, build_bracket_embed(self.event))
+        await log_action(interaction.guild, "👥 Random Teams",
+            f"{interaction.user.mention} formed **{len(bd['teams'])} teams** (size {ts}) for **{self.event['name']}**")
+
+
+class GatherGroupModal(Modal, title="👥 Gather Random Group"):
+    group_size = TextInput(
+        label="How many participants to pick?",
+        placeholder="e.g., 3  (picks 3 random players from all registrants)",
+        required=True, max_length=3)
+    def __init__(self, event, author_id):
+        super().__init__(); self.event = event; self.author_id = author_id
+
+    async def on_submit(self, interaction):
+        try:
+            n = int(self.group_size.value.strip())
+            if n < 1: raise ValueError
+        except:
+            return await interaction.response.send_message(
+                "❌ Enter a valid number (1 or more).", ephemeral=True)
+        regs = self.event.get("registrations", [])
+        if n > len(regs):
+            return await interaction.response.send_message(
+                f"❌ Only **{len(regs)}** registered — can't pick {n}.", ephemeral=True)
+        bd = generate_gather_group(regs, size=n)
+        self.event["bracket_data"] = bd
+        self.event["schedule"] = []
+        save_data(squad_data)
+        # Confirmation embed
+        conf = discord.Embed(
+            title=f"👥 Random Group of {n} — {self.event['name']}",
+            description="\n".join(f"• **{m}**" for m in bd["selected"]),
+            color=ROYAL_GOLD)
+        conf.set_footer(text=f"⚜️ Randomly selected from {len(regs)} registrants")
+        apply_branding(conf, thumbnail=True)
+        await interaction.response.send_message(embed=conf, ephemeral=True)
+        # Public announcement in war-results
+        pub = discord.Embed(
+            title=f"🎲 RANDOM GROUP SELECTED — {self.event['name']}",
+            description=(
+                f"**{n} participant(s)** were randomly selected:\n\n"
+                + "\n".join(f"⚔️ **{m}**" for m in bd["selected"])
+                + (f"\n\n*({len(bd['remaining'])} others were not selected this draw)*" if bd["remaining"] else "")
+            ),
+            color=ROYAL_GOLD)
+        pub.set_footer(text=f"⚜️ Majestic Dominion | {self.event['name']}")
+        apply_branding(pub, thumbnail=False, author=True)
+        await announce_event(interaction.guild, pub)
+        await log_action(interaction.guild, "👥 Group Gathered",
+            f"{interaction.user.mention} randomly picked **{n}** participants for **{self.event['name']}**")
 
 
 class GroupCountModal(Modal, title="🎲 Random Groups"):
     num_groups = TextInput(label="Number of Groups", placeholder="e.g., 4", required=True, max_length=2)
+    advances   = TextInput(label="Teams advancing per group (Groups→Bracket)", placeholder="e.g., 2", required=False, max_length=1)
     def __init__(self, event, author_id):
         super().__init__(); self.event = event; self.author_id = author_id
 
@@ -6503,21 +6783,23 @@ class GroupCountModal(Modal, title="🎲 Random Groups"):
             if n < 2: raise ValueError
         except:
             return await interaction.response.send_message("❌ Enter a valid number ≥ 2.", ephemeral=True)
+        adv = 2
+        if self.advances.value.strip():
+            try: adv = max(1, int(self.advances.value.strip()))
+            except: pass
         regs = self.event.get("registrations", [])
         if len(regs) < n:
             return await interaction.response.send_message(
                 f"❌ Not enough registrations ({len(regs)}) for {n} groups.", ephemeral=True)
-        system = self.event.get("tournament_system","single_elim")
-        if system == "group_bracket":
-            bd = generate_group_bracket(regs, num_groups=n)
-        else:
-            bd = generate_groups(regs, num_groups=n)
-        self.event["bracket_data"] = bd; self.event["schedule"] = []
+        ts = self.event.get("tournament_system", "")
+        bd = generate_group_bracket(regs, num_groups=n) if ts == "group_bracket" else generate_groups(regs, num_groups=n)
+        bd["advances_per_group"] = adv
+        self.event["bracket_data"] = bd
+        self.event["schedule"] = []
         save_data(squad_data)
         embed = build_bracket_embed(self.event)
-        await interaction.response.send_message(embed=embed, ephemeral=False)
-        pub = build_bracket_embed(self.event)
-        await announce_major(interaction.guild, pub)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await announce_major(interaction.guild, build_bracket_embed(self.event))
         await log_action(interaction.guild, "🎲 Groups Generated",
             f"{interaction.user.mention} generated **{n} groups** for **{self.event['name']}**")
 
