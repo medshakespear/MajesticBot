@@ -115,7 +115,7 @@ LOG_CHANNEL_NAME = "『🕹️』bot-logs"
 ANNOUNCE_CHANNEL_NAME = "『🏆』war-results"
 NEWS_CHANNEL_NAME = "『📢』𝐀𝐧𝐧𝐨𝐮𝐧𝐜𝐞𝐦𝐞𝐧𝐭𝐬"
 TOURNAMENT_CHANNEL_NAME = "『🗞️』𝐓𝐨𝐮𝐫𝐧𝐚𝐦𝐞𝐧𝐭-𝐍𝐞𝐰𝐬"
-BOT_COMMANDS_CHANNEL_NAME = "『👑』majestic-𝐁𝐨𝐭-𝐂𝐨𝐦𝐦𝐚𝐧𝐝𝐬"
+BOT_COMMANDS_CHANNEL_NAME = "『👑』Majestic 𝐁𝐨𝐭-𝐂𝐨𝐦𝐦𝐚𝐧𝐝𝐬"
 MAJESTIC_ROLE_NAME = "MAJESTIC"
 BOT_GUIDE_POSTED_KEY = "bot_guide_message_id"
 
@@ -2059,7 +2059,32 @@ async def daily_pulse_task():
                 ev_text += f"{si} **{ev['name']}** — {ev.get('format','?')} | 👥 {rc}{mx}\n"
             embed.add_field(name="🎪 Active Events", value=ev_text.strip(), inline=False)
 
-        embed.set_footer(text=f"📅 {now.strftime('%A, %B %d, %Y')} | ⚜️ Majestic Dominion")
+        # Oracle prediction for today — who will fight next?
+        active_ch = [c for c in squad_data.get("challenges", []) if c["status"] == "scheduled"]
+        if active_ch:
+            next_match = active_ch[0]
+            try:
+                pred = predict_match(next_match["challenger"], next_match["challenged"])
+                t1_tag = SQUADS.get(next_match["challenger"],"?")
+                t2_tag = SQUADS.get(next_match["challenged"],"?")
+                fav = next_match["challenger"] if pred["t1_pct"] > pred["t2_pct"] else next_match["challenged"]
+                fav_pct = max(pred["t1_pct"], pred["t2_pct"])
+                embed.add_field(
+                    name=f"🔮 Oracle Watches: {t1_tag} vs {t2_tag}",
+                    value=(f"📅 **{next_match.get('scheduled_date','TBD')}**\n"
+                           f"👑 Favoured: **{fav}** ({fav_pct}%)\n"
+                           f"*{pred['narrative'][:80]}...*"),
+                    inline=False
+                )
+            except: pass
+
+        # Bottom leaderboard teaser — who's climbing?
+        if len(rankings) >= 3:
+            bottom_3 = rankings[-3:][::-1]
+            danger_text = " · ".join(f"{s['tag']} **{s['name']}** ({s['points']}pts)" for s in bottom_3)
+            embed.add_field(name="⚠️ Kingdoms in the Shadows", value=danger_text, inline=False)
+
+        embed.set_footer(text=f"📅 {now.strftime('%A, %B %d, %Y')} | ⚜️ Majestic Dominion — The Crown Watches All")
         apply_branding(embed, thumbnail=False, author=True)
 
         try:
@@ -2192,18 +2217,30 @@ class ChallengeMessageModal(Modal, title="⚔️ War Declaration"):
         await interaction.response.edit_message(embed=embed, view=None)
 
         # Public announcement in #『🏆』war-results
+        # Rank context for challenge
+        ch_rank  = get_squad_rank(self.challenger) or "?"
+        cd_rank  = get_squad_rank(self.challenged) or "?"
+        rank_txt = f"#{ch_rank} vs #{cd_rank}"
+        upset_hint = ""
+        if isinstance(ch_rank, int) and isinstance(cd_rank, int):
+            if ch_rank > cd_rank:
+                upset_hint = f"\n⚡ *#{ch_rank} challenging #{cd_rank} — an upset could shake the Dominion!*"
+            elif ch_rank == 1:
+                upset_hint = "\n👑 *The #1 kingdom goes hunting — none are safe!*"
+
         pub_embed = discord.Embed(
-            title="⚔️ ROYAL DECLARATION OF WAR!",
+            title="⚔️ A WAR DECLARATION ECHOES THROUGH THE DOMINION!",
             description=(
-                f"**{SQUADS.get(self.challenger, '?')} {self.challenger}** has issued a Royal Declaration of War!\n\n"
-                f"🎯 Target: **{SQUADS.get(self.challenged, '?')} {self.challenged}**\n"
-                f"⏳ Status: **PENDING RESPONSE**"
+                f"**{SQUADS.get(self.challenger, '?')} {self.challenger}** has drawn steel against\n"
+                f"**{SQUADS.get(self.challenged, '?')} {self.challenged}**!\n\n"
+                f"⚔️ *{rank_txt}*{upset_hint}\n\n"
+                f"⏳ **Awaiting response from {self.challenged}...**"
             ),
             color=ROYAL_RED
         )
         if msg:
             pub_embed.add_field(name="📜 War Declaration", value=f"*\"{msg}\"*", inline=False)
-        pub_embed.set_footer(text=f"Challenge ID: {challenge_id} | Leaders of {self.challenged} — accept or decline!")
+        pub_embed.set_footer(text=f"Challenge ID: {challenge_id} | Leaders of {self.challenged} — the throne room awaits your answer!")
 
         # Mention the challenged squad's role
         challenged_role = discord.utils.get(interaction.guild.roles, name=self.challenged)
@@ -2315,7 +2352,12 @@ def build_bounty_embed():
     bounties = squad_data.get("bounties", {})
     embed = discord.Embed(
         title="💰 Royal Bounty Board",
-        description="*By royal decree, these kingdoms carry a price on their crown!*\n\nThe top 3 kingdoms always bear the Crown's bounty. Defeat them to claim your reward!",
+        description=(
+            "*The Crown has placed a price on these heads.*\n"
+            "*Sharpen your steel. The bold shall be rewarded.*\n\n"
+            "🏆 Top 3 kingdoms always carry an automatic bounty.\n"
+            "⚔️ Defeat them in battle to claim the bonus Glory Points!"
+        ),
         color=ROYAL_GOLD
     )
     if not bounties:
@@ -3313,7 +3355,33 @@ async def weekly_digest_task():
                 ev_text += f"{si} **{ev['name']}** — {ev.get('format','?')} | 👥 {rc}\n"
             embed.add_field(name="🎪 Active Events", value=ev_text.strip(), inline=False)
 
-        embed.set_footer(text="⚜️ Majestic Dominion | Royal Chronicle | Published every Sunday")
+        # Most active kingdom (most matches this week)
+        if week_wins:
+            total_week = {}
+            for m in week_matches:
+                total_week[m["team1"]] = total_week.get(m["team1"], 0) + 1
+                total_week[m["team2"]] = total_week.get(m["team2"], 0) + 1
+            if total_week:
+                most_active = max(total_week, key=total_week.get)
+                ma_tag = SQUADS.get(most_active, "?")
+                embed.add_field(
+                    name="⚔️ Most Active Kingdom",
+                    value=f"**{ma_tag} {most_active}** — {total_week[most_active]} battles this week",
+                    inline=True
+                )
+
+        # Fun stat of the week
+        total_matches = len(squad_data["matches"])
+        total_pts = sum(s["points"] for s in squad_data["squads"].values())
+        fun_facts_weekly = [
+            f"⚔️ The Dominion has witnessed **{total_matches}** total battles in its chronicles!",
+            f"💎 A combined **{total_pts}** Glory Points have been earned across all kingdoms!",
+            f"🏰 **{len(SQUADS)}** kingdoms are currently vying for the throne!",
+            f"🔮 The Oracle has analysed **{total_matches}** clashes of steel — it has seen everything.",
+        ]
+        embed.add_field(name="📜 Chronicle Fact", value=random.choice(fun_facts_weekly), inline=False)
+
+        embed.set_footer(text=f"⚜️ Majestic Dominion | Royal Chronicle | Week of {now.strftime('%B %d')} — *Glory awaits the bold*")
         apply_branding(embed, thumbnail=False, author=True)
 
         try:
@@ -3368,9 +3436,15 @@ def build_profile_embed(member: discord.Member, guild: discord.Guild):
         elif member.id in si.get("subs", []):
             rs = "🔄 Substitute"
 
+    power_bar = "█" * (power // 10) + "░" * (10 - power // 10)
+    tier_icon = rank_info[1].split()[0] if rank_info else "⚜️"
     embed = discord.Embed(
-        title=f"⚜️ {pd.get('ingame_name', 'Unknown')}",
-        description=f"{member.mention}'s warrior profile\n{rank_info[1]} — *{rank_info[2]}*",
+        title=f"{tier_icon} {pd.get('ingame_name', 'Unknown')}",
+        description=(
+            f"{member.mention}\n"
+            f"{rank_info[1]} — *{rank_info[2]}*\n"
+            f"⚡ Power: `{power_bar}` **{power}/100**"
+        ),
         color=sr.color if sr else ROYAL_BLUE
     )
     embed.add_field(name="⚔️ IGN", value=pd.get('ingame_name', '?'), inline=True)
@@ -3379,7 +3453,7 @@ def build_profile_embed(member: discord.Member, guild: discord.Guild):
 
     role = pd.get('role', '?')
     embed.add_field(name="💼 Position", value=f"{ROLE_EMOJIS.get(role, '⚔️')} {role}", inline=True)
-    embed.add_field(name="💪 Power Rating", value=f"**{power}/100** {'█' * (power // 10)}{'░' * (10 - power // 10)}", inline=True)
+    embed.add_field(name="💪 Power Tier", value=f"{rank_info[1]}", inline=True)
 
     if sn and sn != "Free Agent":
         embed.add_field(name="🏰 Kingdom", value=f"{st} **{sn}**\n{rs}", inline=True)
@@ -4077,22 +4151,64 @@ class RecordBattleScoreModal(Modal, title="⚔️ Enter Battle Score"):
             f"{interaction.user.mention} recorded: {self.team1_name} vs {self.team2_name} ({self.result.value}) | ID: {match_id}")
 
         # --- Public announcement in #『🏆』war-results ---
-        pub_embed = discord.Embed(
-            title="⚔️ ROYAL WAR REPORT",
-            description=f"{result_text}\n\n*{flavor_quote}*",
-            color=ROYAL_GOLD if actual_winner != "draw" else ROYAL_BLUE
-        )
-        pub_embed.add_field(name="📊 Score", value=f"**{SQUADS.get(self.team1_name, '?')} {self.team1_name}** {self.result.value} **{SQUADS.get(self.team2_name, '?')} {self.team2_name}**", inline=False)
+        t1_tag = SQUADS.get(self.team1_name, "?")
+        t2_tag = SQUADS.get(self.team2_name, "?")
+        score_parts = self.result.value.split("-")
+        s1_disp, s2_disp = score_parts[0], score_parts[1] if len(score_parts) > 1 else "?"
+
         if actual_winner != "draw":
-            winner_name = actual_winner
-            winner_pts = t1_pts if actual_winner == self.team1_name else t2_pts
-            winner_tags = glory_tags_t1 if actual_winner == self.team1_name else glory_tags_t2
-            pts_text = f"💎 **+{winner_pts} Glory Points** earned"
-            if winner_tags:
-                pts_text += "\n" + " ".join(winner_tags)
-            pub_embed.add_field(name=f"🏆 {SQUADS.get(winner_name, '?')} {winner_name}", value=pts_text, inline=False)
-        pub_embed.add_field(name="🔮 Oracle", value=oracle_text, inline=False)
-        pub_embed.set_footer(text=f"Match #{match_id} | {datetime.utcnow().strftime('%b %d, %Y %H:%M')} UTC")
+            w_name = actual_winner
+            l_name = self.team2_name if actual_winner == self.team1_name else self.team1_name
+            w_tag  = SQUADS.get(w_name, "?")
+            l_tag  = SQUADS.get(l_name, "?")
+            w_pts  = t1_pts if actual_winner == self.team1_name else t2_pts
+            l_pts  = t2_pts if actual_winner == self.team1_name else t1_pts
+            w_tags = glory_tags_t1 if actual_winner == self.team1_name else glory_tags_t2
+            w_si   = squad_data["squads"].get(w_name, {})
+            l_si   = squad_data["squads"].get(l_name, {})
+            pub_desc = (
+                f"### {w_tag} {w_name} ⚔️ {l_tag} {l_name}\n"
+                f"*{flavor_quote}*"
+            )
+            pub_embed = discord.Embed(title="⚔️ BATTLE CONCLUDED!", description=pub_desc, color=ROYAL_GOLD)
+            pub_embed.add_field(
+                name=f"🏆 {w_tag} {w_name} — VICTORY",
+                value=(
+                    f"**Score: {self.result.value}**\n"
+                    f"💎 +**{w_pts}** Glory Points\n"
+                    + (" ".join(w_tags) + "\n" if w_tags else "")
+                    + f"📊 {w_si.get('wins',0)}W-{w_si.get('draws',0)}D-{w_si.get('losses',0)}L | {w_si.get('points',0)} pts total"
+                ),
+                inline=True
+            )
+            pub_embed.add_field(
+                name=f"💀 {l_tag} {l_name} — Defeat",
+                value=(
+                    f"**Score: {self.result.value}**\n"
+                    f"💎 +**{l_pts}** pts\n"
+                    f"📊 {l_si.get('wins',0)}W-{l_si.get('draws',0)}D-{l_si.get('losses',0)}L | {l_si.get('points',0)} pts total"
+                ),
+                inline=True
+            )
+        else:
+            w_si = squad_data["squads"].get(self.team1_name, {})
+            l_si = squad_data["squads"].get(self.team2_name, {})
+            pub_embed = discord.Embed(
+                title="⚖️ THE THRONE STANDS STILL — DRAW!",
+                description=f"### {t1_tag} {self.team1_name} ⚖️ {t2_tag} {self.team2_name}\n*{flavor_quote}*",
+                color=ROYAL_BLUE
+            )
+            pub_embed.add_field(
+                name=f"{t1_tag} {self.team1_name}",
+                value=f"**{self.result.value}** | +1 pt | {w_si.get('points',0)} pts total", inline=True
+            )
+            pub_embed.add_field(
+                name=f"{t2_tag} {self.team2_name}",
+                value=f"**{self.result.value}** | +1 pt | {l_si.get('points',0)} pts total", inline=True
+            )
+
+        pub_embed.add_field(name="🔮 Oracle Verdict", value=oracle_text, inline=False)
+        pub_embed.set_footer(text=f"⚔️ Match #{match_id} | {datetime.utcnow().strftime('%b %d, %Y · %H:%M')} UTC | ⚜️ Majestic Dominion")
         await announce_match(interaction.guild, pub_embed)
 
         # --- Live Streak Alerts ---
@@ -4115,11 +4231,16 @@ class RecordBattleScoreModal(Modal, title="⚔️ Enter Battle Score"):
                 all_new_achievements.append(f"{a['name']} — **{SQUADS.get(self.team2_name, '?')} {self.team2_name}**")
         if all_new_achievements:
             ach_embed = discord.Embed(
-                title="🏅 ROYAL HONOUR BESTOWED!",
-                description="\n".join(all_new_achievements),
+                title="🏅 THE CROWN BESTOWS HONOUR!",
+                description=(
+                    "*The royal trumpets sound across the Dominion...*\n\n"
+                    + "\n".join(f"🎖️ {a}" for a in all_new_achievements)
+                    + "\n\n*Glory earned in the fires of battle!*"
+                ),
                 color=ROYAL_GOLD
             )
-            ach_embed.set_footer(text="⚜️ Majestic Dominion | New honours earned")
+            ach_embed.set_footer(text="⚜️ Majestic Dominion | Honour is forever inscribed in the chronicles")
+            apply_branding(ach_embed, thumbnail=True)
             await announce_event(interaction.guild, ach_embed)
 
 
@@ -5040,10 +5161,26 @@ async def member_command(interaction: discord.Interaction):
         description=f"*Hail,* **{interaction.user.display_name}**! *Welcome to the Royal Court.*{sq_text}",
         color=ROYAL_BLUE
     )
-    embed.add_field(name="🌟 Realm", value=(
+    embed.add_field(name="🌟 The Realm", value=(
         f"🏰 {len(SQUADS)} kingdoms • ⚔️ {tm} battles" + (f" • 👑 {top['name']} leads" if top else "") +
-        f"\n💰 {len(squad_data.get('bounties', {}))} bounties • 🎯 {len([c for c in squad_data.get('challenges', []) if c['status'] in ('pending', 'accepted')])} challenges"
+        f"\n💰 {len(squad_data.get('bounties', {}))} bounties • 🎯 {len([c for c in squad_data.get('challenges', []) if c['status'] in ('pending', 'accepted')])} active challenges"
     ), inline=False)
+
+    # Show open events in member panel
+    open_events = [e for e in squad_data.get("events", []) if e["status"] in ("open", "ongoing")]
+    if open_events:
+        ev_lines = []
+        for ev in open_events[:3]:
+            si  = "🟢" if ev["status"] == "open" else "⚔️"
+            rc  = len(ev.get("registrations", []))
+            mx  = f"/{ev['max_entries']}" if ev.get("max_entries") else ""
+            pp  = f" · 💰 {ev['prize_pool']}" if ev.get("prize_pool") else ""
+            ev_lines.append(f"{si} **{ev['name']}** — {ev.get('format','?')} · 👥 {rc}{mx}{pp}")
+        embed.add_field(
+            name=f"🎪 Open Events ({len(open_events)})",
+            value="\n".join(ev_lines) + "\n*Use `/events` to register!*",
+            inline=False
+        )
 
     # Show player's power rating if they have a profile
     power, rank_info = calculate_power_rating(interaction.user.id)
@@ -5759,7 +5896,8 @@ def get_unscheduled_matches(event):
     return [m for m in get_all_bracket_matches(event)
             if m["match_id"] not in scheduled_ids
             and "TBD" not in [m.get("team1",""), m.get("team2","")]
-            and "BYE" not in [m.get("team1",""), m.get("team2","")]]
+            and m.get("team2") != "BYE"   # BYE matches auto-advance, no scheduling needed
+            and m.get("team1") != "BYE"]
 
 # ── Embed builders ─────────────────────────────────────────────────────
 
@@ -5926,27 +6064,45 @@ def build_bracket_embed(event):
         color=ROYAL_GOLD)
 
     if system == "single_elim":
-        round_names = ["Grand Final","Semi-Finals","Quarter-Finals","Round of 16","Round of 32","Round of 64"]
+        round_names = ["Grand Final","Semi-Finals","Quarter-Finals",
+                       "Round of 16","Round of 32","Round of 64","Round of 128"]
         rounds = bd.get("rounds",[])
-        total = len(rounds)
+        total  = len(rounds)
+        per_field = 15  # max matches per embed field (keeps chars well under 1024)
         for ri, rnd in enumerate(rounds):
             rn_idx = total - 1 - ri
             rn = round_names[rn_idx] if rn_idx < len(round_names) else f"Round {ri+1}"
             lines = [f"`{m['match_id']}` **{m['team1']}** vs **{m['team2']}**" for m in rnd]
-            val = "\n".join(lines)[:1024]
-            embed.add_field(name=f"⚔️ {rn}", value=val, inline=False)
+            # Split into sub-fields if round has many matches
+            for ci in range(0, len(lines), per_field):
+                chunk = "\n".join(lines[ci:ci+per_field])
+                part_label = f" ({ci//per_field + 1})" if len(lines) > per_field else ""
+                embed.add_field(name=f"⚔️ {rn}{part_label}", value=chunk, inline=False)
+                if len(embed.fields) >= 24: break
+            if len(embed.fields) >= 24: break
 
     elif system == "double_elim":
+        per_field = 15
         for ri, rnd in enumerate(bd.get("winners",[])):
             lines = [f"`{m['match_id']}` {m['team1']} vs {m['team2']}" for m in rnd]
-            embed.add_field(name=f"🏆 WB Round {ri+1}", value="\n".join(lines)[:1024], inline=False)
+            for ci in range(0, len(lines), per_field):
+                chunk = "\n".join(lines[ci:ci+per_field])
+                part_label = f" ({ci//per_field + 1})" if len(lines) > per_field else ""
+                embed.add_field(name=f"🏆 WB Round {ri+1}{part_label}", value=chunk, inline=False)
+                if len(embed.fields) >= 22: break
+            if len(embed.fields) >= 22: break
         for ri, rnd in enumerate(bd.get("losers",[])):
             lines = [f"`{m['match_id']}` {m['team1']} vs {m['team2']}" for m in rnd]
-            embed.add_field(name=f"💀 LB Round {ri+1}", value="\n".join(lines)[:1024], inline=False)
+            for ci in range(0, len(lines), per_field):
+                chunk = "\n".join(lines[ci:ci+per_field])
+                part_label = f" ({ci//per_field + 1})" if len(lines) > per_field else ""
+                embed.add_field(name=f"💀 LB Round {ri+1}{part_label}", value=chunk, inline=False)
+                if len(embed.fields) >= 24: break
+            if len(embed.fields) >= 24: break
         gf = bd.get("grand_final")
         if gf:
             embed.add_field(name="🎯 Grand Final",
-                value=f"`{gf['match_id']}` {gf['team1']} vs {gf['team2']}", inline=False)
+                value=f"`{gf['match_id']}` **{gf['team1']}** vs **{gf['team2']}**", inline=False)
 
     elif system in ("round_robin",):
         matches = bd.get("matches",[])
@@ -6932,70 +7088,67 @@ class CreateEventModal(Modal, title="🎪 New Event — Basic Info"):
 
 
 class CreateEventSettingsView(View):
+    """
+    Row 0: Type buttons  (🏆 Tournament | 🎉 Social Event)
+    Row 1: Registration mode select
+    Row 2: Bracket system select
+    Row 3: Format select  (fixed list for tournaments, free-text for social)
+    Row 4: 💰 Prize | 📜 Rules | 🖼️ Image | ✅ Create | ❌ Cancel
+    """
     TOURNAMENT_FORMATS = ["1v1", "2v2", "3v3", "4v4", "5v5", "6v6", "7v7"]
 
     def __init__(self, partial, author_id):
         super().__init__(timeout=300)
-        self.partial          = partial
-        self.author_id        = author_id
-        self.ev_type          = "tournament"
-        self.reg_mode         = "squad_5v5"
-        self.team_size        = 5          # for small_team
+        self.partial           = partial
+        self.author_id         = author_id
+        self.ev_type           = "tournament"
+        self.reg_mode          = "squad_5v5"
+        self.team_size         = 5
         self.tournament_system = "single_elim"
-        self.rand_groups      = False
-        self.rand_bracket     = False
-        self.prize_pool       = ""
-        self.event_image      = ""
-        self.rules            = ""
-        # format starts empty; forced for tournament, free for fun/custom
+        self.prize_pool        = ""
+        self.event_image       = ""
+        self.rules             = ""
         if not self.partial.get("format"):
-            self.partial["format"] = "5v5"   # default tournament default
+            self.partial["format"] = "5v5"
 
-    # ── helpers ──────────────────────────────────────────────────────────
     def _reg_label(self):
-        if self.reg_mode == "solo":       return "👤 Solo"
-        if self.reg_mode == "squad_5v5":  return "👑 Squad 5v5 (Leaders Only)"
+        if self.reg_mode == "solo":      return "👤 Solo"
+        if self.reg_mode == "squad_5v5": return "👑 Squad 5v5 (Leaders Only)"
         return f"👥 Small Team ({self.team_size}v{self.team_size})"
 
     def _sys_label(self):
         if not self.tournament_system: return "None (no bracket)"
-        return TOURNAMENT_SYSTEMS.get(self.tournament_system, ("",""))[1]
-
-    def _format_display(self):
-        fmt = self.partial.get("format","—")
-        if self.ev_type == "tournament":
-            return f"**{fmt}** *(fixed)*"
-        return f"**{fmt}** *(free text)*"
+        return TOURNAMENT_SYSTEMS.get(self.tournament_system, ("", ""))[1]
 
     def _embed(self):
+        fmt  = self.partial.get("format") or "—"
+        type_label = "Tournament" if self.ev_type == "tournament" else "Social Event"
         embed = discord.Embed(title=f"🎪 {self.partial['name']}", color=ROYAL_GOLD)
-        embed.add_field(name="📋 Type",           value=f"**{self.ev_type.title()}**",  inline=True)
-        embed.add_field(name="⚔️ Format",         value=self._format_display(),         inline=True)
-        embed.add_field(name="📝 Registration",   value=self._reg_label(),              inline=True)
-        embed.add_field(name="🏆 Bracket System", value=self._sys_label(),              inline=True)
-        embed.add_field(name="🎲 Rand Groups",    value="✅" if self.rand_groups  else "❌", inline=True)
-        embed.add_field(name="🏆 Rand Bracket",   value="✅" if self.rand_bracket else "❌", inline=True)
-        embed.add_field(name="📅 Date",           value=self.partial["date"],            inline=True)
+        embed.add_field(name="📋 Type",           value=f"**{type_label}**",       inline=True)
+        embed.add_field(name="⚔️ Format",         value=f"**{fmt}**",              inline=True)
+        embed.add_field(name="📝 Registration",   value=self._reg_label(),         inline=True)
+        embed.add_field(name="🏆 Bracket System", value=self._sys_label(),         inline=True)
+        embed.add_field(name="📅 Date",           value=self.partial["date"],       inline=True)
         if self.partial.get("max_entries"):
             embed.add_field(name="🔢 Max",        value=str(self.partial["max_entries"]), inline=True)
         if self.prize_pool:
-            embed.add_field(name="💰 Prize",      value=self.prize_pool,                inline=True)
+            embed.add_field(name="💰 Prize",      value=self.prize_pool,           inline=True)
         if self.event_image:
-            embed.add_field(name="🖼️ Image",      value="✅ Set",                        inline=True)
+            embed.add_field(name="🖼️ Image",      value="✅ Set",                   inline=True)
             embed.set_image(url=self.event_image)
         if self.rules:
             embed.add_field(name="📜 Rules",
-                value=self.rules[:200]+("..." if len(self.rules)>200 else ""), inline=False)
-        embed.add_field(name="📖 Description",    value=self.partial["description"][:200], inline=False)
-        embed.set_footer(text="⚜️ Configure then click ✅ Create Event")
+                value=self.rules[:200] + ("..." if len(self.rules) > 200 else ""), inline=False)
+        embed.add_field(name="📖 Description", value=self.partial["description"][:200], inline=False)
+        embed.set_footer(text="⚜️ Configure then click ✅ Create")
         apply_branding(embed, thumbnail=True)
         return embed
 
-    # ── Row 0: Event type ──────────────────────────────────────────────
+    # Row 0 ── Event type
     @discord.ui.button(label="🏆 Tournament", style=discord.ButtonStyle.primary, row=0)
     async def t_tournament(self, i, b):
+        if i.user.id != self.author_id: return
         self.ev_type = "tournament"
-        # Ensure format is a fixed tournament format
         if self.partial.get("format") not in self.TOURNAMENT_FORMATS:
             self.partial["format"] = "5v5"
         if not self.tournament_system:
@@ -7004,25 +7157,23 @@ class CreateEventSettingsView(View):
 
     @discord.ui.button(label="🎉 Social Event", style=discord.ButtonStyle.primary, row=0)
     async def t_fun(self, i, b):
-        """Fun / themed / special events — free format, optional bracket."""
+        if i.user.id != self.author_id: return
         self.ev_type = "fun"
         if self.partial.get("format") in self.TOURNAMENT_FORMATS:
             self.partial["format"] = ""
-        self.tournament_system = None   # no bracket by default for social events
+        self.tournament_system = None
         await i.response.edit_message(embed=self._embed(), view=self)
 
-    # (Custom type merged into Social Event — no difference in behaviour)
-
-    # ── Row 1: Registration mode + team size ───────────────────────────
-    @discord.ui.select(placeholder="📝 Registration mode & team size...", row=1, options=[
-        discord.SelectOption(label="👤 Solo",               value="solo",
+    # Row 1 ── Registration mode
+    @discord.ui.select(placeholder="📝 Registration mode...", row=1, options=[
+        discord.SelectOption(label="👤 Solo",                     value="solo",
             description="Each player registers individually"),
-        discord.SelectOption(label="👥 Small Team — 2v2",   value="small_team_2",
-            description="2 players per team — leader registers"),
-        discord.SelectOption(label="👥 Small Team — 3v3",   value="small_team_3",
-            description="3 players per team — leader registers"),
-        discord.SelectOption(label="👥 Small Team — 4v4",   value="small_team_4",
-            description="4 players per team — leader registers"),
+        discord.SelectOption(label="👥 Small Team — 2v2",         value="small_team_2",
+            description="2 players per team"),
+        discord.SelectOption(label="👥 Small Team — 3v3",         value="small_team_3",
+            description="3 players per team"),
+        discord.SelectOption(label="👥 Small Team — 4v4",         value="small_team_4",
+            description="4 players per team"),
         discord.SelectOption(label="👑 Squad 5v5 (Leaders Only)", value="squad_5v5",
             description="Uses existing squad system"),
     ])
@@ -7032,7 +7183,6 @@ class CreateEventSettingsView(View):
         if val.startswith("small_team_"):
             self.reg_mode  = "small_team"
             self.team_size = int(val.split("_")[-1])
-            # Auto-set format for tournament if still default
             if self.ev_type == "tournament":
                 self.partial["format"] = f"{self.team_size}v{self.team_size}"
         else:
@@ -7041,81 +7191,91 @@ class CreateEventSettingsView(View):
                 self.partial["format"] = "5v5"
         await interaction.response.edit_message(embed=self._embed(), view=self)
 
-    # ── Row 2: Bracket system (optional) ──────────────────────────────
+    # Row 2 ── Bracket system
     @discord.ui.select(placeholder="🏆 Bracket system (optional)...", row=2, options=[
-        discord.SelectOption(label="None (no bracket)", value="none",
-            description="Fun/custom event without a bracket"),
-        discord.SelectOption(label="🏆 Single Elimination", value="single_elim",
+        discord.SelectOption(label="None (no bracket)",           value="none",
+            description="Social/fun event without a bracket"),
+        discord.SelectOption(label="🏆 Single Elimination",       value="single_elim",
             description="Classic — one loss and out"),
-        discord.SelectOption(label="⚔️ Double Elimination", value="double_elim",
+        discord.SelectOption(label="⚔️ Double Elimination",       value="double_elim",
             description="Two losses to be eliminated"),
-        discord.SelectOption(label="🔄 Round Robin",        value="round_robin",
+        discord.SelectOption(label="🔄 Round Robin",              value="round_robin",
             description="Everyone plays everyone"),
-        discord.SelectOption(label="🎯 Group Stage → Bracket", value="group_bracket",
+        discord.SelectOption(label="🎯 Group Stage → Bracket",    value="group_bracket",
             description="Groups first, then knockout"),
     ])
     async def sys_select(self, interaction, select):
         if interaction.user.id != self.author_id: return
         val = select.values[0]
         self.tournament_system = None if val == "none" else val
-        if val in ("group_bracket",):   self.rand_groups  = True
-        if val in ("single_elim","double_elim","group_bracket"): self.rand_bracket = True
         await interaction.response.edit_message(embed=self._embed(), view=self)
 
-    # ── Row 3: Format button + toggles + extras ────────────────────────
-    @discord.ui.button(label="⚔️ Set Format", style=discord.ButtonStyle.primary, row=3)
-    async def format_btn(self, i, b):
-        if i.user.id != self.author_id: return
-        if self.ev_type == "tournament":
-            await i.response.send_modal(TournamentFormatModal(self))
-        else:
-            await i.response.send_modal(FreeFormatModal(self))
+    # Row 3 ── Format select
+    @discord.ui.select(placeholder="⚔️ Select event format...", row=3, options=[
+        discord.SelectOption(label="1v1",  value="1v1",  emoji="⚔️"),
+        discord.SelectOption(label="2v2",  value="2v2",  emoji="👥"),
+        discord.SelectOption(label="3v3",  value="3v3",  emoji="🔱"),
+        discord.SelectOption(label="4v4",  value="4v4",  emoji="🏰"),
+        discord.SelectOption(label="5v5",  value="5v5",  emoji="👑",
+            description="Required for Squad 5v5 events"),
+        discord.SelectOption(label="6v6",  value="6v6",  emoji="🛡️"),
+        discord.SelectOption(label="7v7",  value="7v7",  emoji="⚜️"),
+        discord.SelectOption(label="✏️ Custom / Free format (Social events only)", value="free",
+            description="Type any format — e.g. 1v2, FFA, Hide & Seek"),
+    ])
+    async def format_select(self, interaction, select):
+        if interaction.user.id != self.author_id: return
+        val = select.values[0]
+        if val == "free":
+            if self.ev_type == "tournament":
+                return await interaction.response.send_message(
+                    "❌ Tournaments require a **fixed format** (1v1 – 7v7). "
+                    "Switch to 🎉 **Social Event** to use a custom format.", ephemeral=True)
+            return await interaction.response.send_modal(FreeFormatModal(self))
+        self.partial["format"] = val
+        await interaction.response.edit_message(embed=self._embed(), view=self)
 
-    @discord.ui.button(label="🎲 Rand Groups",  style=discord.ButtonStyle.secondary, row=3)
-    async def tog_grp(self, i, b):
-        self.rand_groups = not self.rand_groups
-        await i.response.edit_message(embed=self._embed(), view=self)
-
-    @discord.ui.button(label="🏆 Rand Bracket", style=discord.ButtonStyle.secondary, row=3)
-    async def tog_brk(self, i, b):
-        self.rand_bracket = not self.rand_bracket
-        await i.response.edit_message(embed=self._embed(), view=self)
-
-    @discord.ui.button(label="💰 Prize Pool",   style=discord.ButtonStyle.secondary, row=3)
+    # Row 4 ── Extras + confirm
+    @discord.ui.button(label="💰 Prize",  style=discord.ButtonStyle.secondary, row=4)
     async def prize_btn(self, i, b):
+        if i.user.id != self.author_id: return
         await i.response.send_modal(AddPrizePoolModal(self))
 
-    # ── Row 4: Image + Rules + Create + Cancel ─────────────────────────
-    @discord.ui.button(label="🖼️ Image", style=discord.ButtonStyle.secondary, row=4)
-    async def image_btn(self, i, b):
-        await i.response.send_modal(AddImageModal(self))
-
-    @discord.ui.button(label="📜 Rules", style=discord.ButtonStyle.secondary, row=4)
+    @discord.ui.button(label="📜 Rules",  style=discord.ButtonStyle.secondary, row=4)
     async def rules_btn(self, i, b):
+        if i.user.id != self.author_id: return
         await i.response.send_modal(AddRulesModal(self))
 
-    @discord.ui.button(label="✅ Create Event", style=discord.ButtonStyle.success, row=4)
+    @discord.ui.button(label="🖼️ Image",  style=discord.ButtonStyle.secondary, row=4)
+    async def image_btn(self, i, b):
+        if i.user.id != self.author_id: return
+        await i.response.send_modal(AddImageModal(self))
+
+    @discord.ui.button(label="✅ Create", style=discord.ButtonStyle.success, row=4)
     async def create_confirm(self, interaction, button):
         if interaction.user.id != self.author_id: return
-        # Format must be set
         if not self.partial.get("format"):
             return await interaction.response.send_message(
-                "❌ Please set a **Format** first (click ⚔️ Set Format).", ephemeral=True)
+                "❌ Please select a **Format** first (Row 3).", ephemeral=True)
         event_id = str(uuid.uuid4())[:8]
-        # Build reg_mode string — small_team stores team_size separately
-        actual_reg_mode = self.reg_mode
         event = {
             "id": event_id, "name": self.partial["name"],
-            "type": self.ev_type, "registration_mode": actual_reg_mode,
-            "team_size": self.team_size if actual_reg_mode == "small_team" else (5 if actual_reg_mode == "squad_5v5" else 1),
-            "format": self.partial["format"], "max_entries": self.partial.get("max_entries"),
-            "date": self.partial["date"], "description": self.partial["description"],
-            "rules": self.rules, "prize_pool": self.prize_pool, "event_image": self.event_image,
-            "status": "open",
+            "type": self.ev_type, "registration_mode": self.reg_mode,
+            "team_size": (self.team_size if self.reg_mode == "small_team"
+                          else 5 if self.reg_mode == "squad_5v5" else 1),
+            "format":      self.partial["format"],
+            "max_entries": self.partial.get("max_entries"),
+            "date":        self.partial["date"],
+            "description": self.partial["description"],
+            "rules":       self.rules,
+            "prize_pool":  self.prize_pool,
+            "event_image": self.event_image,
+            "status":      "open",
             "tournament_system": self.tournament_system,
-            "randomize_groups": self.rand_groups, "randomize_brackets": self.rand_bracket,
+            "randomize_groups": False, "randomize_brackets": False,
             "registrations": [], "bracket_data": None, "schedule": [],
-            "created_by": str(interaction.user.id), "created_at": datetime.utcnow().isoformat()
+            "created_by": str(interaction.user.id),
+            "created_at": datetime.utcnow().isoformat()
         }
         if "events" not in squad_data: squad_data["events"] = []
         squad_data["events"].append(event)
@@ -7134,33 +7294,10 @@ class CreateEventSettingsView(View):
         await interaction.response.edit_message(content="❌ Event creation cancelled.", embed=None, view=None)
 
 
-class TournamentFormatModal(Modal, title="⚔️ Tournament Format"):
-    """Fixed format picker for tournaments (predefined options shown as hint)."""
-    fmt = TextInput(
-        label="Format  (1v1 / 2v2 / 3v3 / 4v4 / 5v5 / 6v6 / 7v7)",
-        placeholder="Type exactly e.g.: 5v5",
-        required=True, max_length=10
-    )
-    def __init__(self, parent):
-        super().__init__(); self.parent = parent
-    async def on_submit(self, interaction):
-        val = self.fmt.value.strip()
-        allowed = CreateEventSettingsView.TOURNAMENT_FORMATS
-        if val not in allowed:
-            return await interaction.response.send_message(
-                f"❌ Tournament format must be one of: `{'` | `'.join(allowed)}`",
-                ephemeral=True)
-        self.parent.partial["format"] = val
-        await interaction.response.edit_message(embed=self.parent._embed(), view=self.parent)
-
-
-class FreeFormatModal(Modal, title="⚔️ Event Format"):
-    """Free-text format for fun/custom events."""
-    fmt = TextInput(
-        label="Format  (any — e.g. 1v1, 2v2, 1v2, 3v2, FFA…)",
-        placeholder="Type any format freely",
-        required=True, max_length=30
-    )
+class FreeFormatModal(Modal, title="⚔️ Custom Format"):
+    """Free-text format for social events."""
+    fmt = TextInput(label="Format (any — e.g. 1v2, FFA, Hide & Seek…)",
+        placeholder="Type any format freely", required=True, max_length=30)
     def __init__(self, parent):
         super().__init__(); self.parent = parent
     async def on_submit(self, interaction):
@@ -7169,73 +7306,106 @@ class FreeFormatModal(Modal, title="⚔️ Event Format"):
 
 
 async def announce_new_event(guild, event):
-    """Announce new event to the Announcements channel with @MAJESTIC tag."""
-    ann_ch = discord.utils.get(guild.text_channels, name=NEWS_CHANNEL_NAME)
-    if not ann_ch:
-        ann_ch = discord.utils.get(guild.text_channels, name=ANNOUNCE_CHANNEL_NAME)
-    if not ann_ch: return
+    """
+    Announcements channel → @MAJESTIC ping + clean summary (name, description, format, reg, date, max, prize, how to register, check war-results).
+    War-results channel   → full details embed, NO ping.
+    """
+    ann_ch = (discord.utils.get(guild.text_channels, name=NEWS_CHANNEL_NAME)
+              or discord.utils.get(guild.text_channels, name=ANNOUNCE_CHANNEL_NAME))
+    war_ch = discord.utils.get(guild.text_channels, name=ANNOUNCE_CHANNEL_NAME)
 
     majestic_role = discord.utils.get(guild.roles, name=MAJESTIC_ROLE_NAME)
-    mention_text = majestic_role.mention if majestic_role else f"@{MAJESTIC_ROLE_NAME}"
+    mention       = majestic_role.mention if majestic_role else f"@{MAJESTIC_ROLE_NAME}"
 
-    type_icon = {"tournament":"🏆","fun":"🎉","social":"🎉"}.get(event["type"],"🎪")
-    rm_icon = {"solo":"👤","small_team":"👥","squad_5v5":"👑"}.get(event.get("registration_mode","solo"),"")
-    sys_label = TOURNAMENT_SYSTEMS.get(event.get("tournament_system",""),("",""))[1]
+    ts       = event.get("team_size", 2)
+    rm_labels = {
+        "solo":       "👤 Solo",
+        "small_team": f"👥 Small Team ({ts}v{ts})",
+        "squad_5v5":  "👑 Squad 5v5 (Leaders Only)",
+    }
+    rm_label   = rm_labels.get(event.get("registration_mode", "solo"), "?")
+    type_icon  = {"tournament": "🏆", "fun": "🎉", "social": "🎉"}.get(event["type"], "🎪")
+    type_label = "Tournament" if event["type"] == "tournament" else "Social Event"
+    sys_label  = TOURNAMENT_SYSTEMS.get(event.get("tournament_system", ""), ("", ""))[1]
 
-    pub = discord.Embed(title="🎪 NEW EVENT ANNOUNCED!",
-        description=f"**{event['name']}** is now **open for registration!**\n\n*{event['description']}*",
-        color=ROYAL_GOLD, timestamp=datetime.utcnow())
-    pub.add_field(name="📋 Type",     value=f"{type_icon} {event['type'].title()}",   inline=True)
-    pub.add_field(name="⚔️ Format",   value=event.get("format","?"),                   inline=True)
-    pub.add_field(name="📝 Reg Mode", value=f"{rm_icon} {event.get('registration_mode','?').replace('_',' ').title()}", inline=True)
-    pub.add_field(name="📅 Date",     value=event["date"],                             inline=True)
-    if event.get("max_entries"):
-        pub.add_field(name="🔢 Max",  value=str(event["max_entries"]),                inline=True)
-    if event.get("prize_pool"):
-        pub.add_field(name="💰 Prize Pool", value=event["prize_pool"],               inline=True)
-    if event["type"] == "tournament" and sys_label:
-        pub.add_field(name="🏆 System", value=sys_label,                             inline=True)
-    if event.get("rules"):
-        pub.add_field(name="📜 Rules", value=event["rules"][:512],                   inline=False)
-    pub.add_field(name="📝 How to Register",
-        value="Use `/events` — select the event and click **Register**!", inline=False)
-    pub.set_footer(text=f"⚜️ Majestic Dominion | Event ID: {event['id']}")
-    apply_branding(pub, thumbnail=False, author=True)
+    # ── Announcements channel: @MAJESTIC ping + clean summary ─────────
+    if ann_ch:
+        ann_embed = discord.Embed(
+            title=f"🎪 {event['name']}",
+            description=event.get("description", ""),
+            color=ROYAL_GOLD,
+            timestamp=datetime.utcnow()
+        )
+        ann_embed.add_field(name="⚔️ Format",       value=event.get("format", "?"), inline=True)
+        ann_embed.add_field(name="📝 Registration",  value=rm_label,                 inline=True)
+        ann_embed.add_field(name="📅 Date",          value=event["date"],             inline=True)
+        if event.get("max_entries"):
+            ann_embed.add_field(name="🔢 Max Entries", value=str(event["max_entries"]), inline=True)
+        if event.get("prize_pool"):
+            ann_embed.add_field(name="💰 Prize Pool",  value=event["prize_pool"],       inline=True)
+        ann_embed.add_field(
+            name="📝 How to Register",
+            value=f"Type `/events` → select **{event['name']}** → click **📝 Register**",
+            inline=False
+        )
+        ann_embed.add_field(
+            name="📺 Full Details & Updates",
+            value=f"Bracket, schedule and all game updates in **{ANNOUNCE_CHANNEL_NAME}**",
+            inline=False
+        )
+        ann_embed.set_footer(text=f"⚜️ Majestic Dominion | Event ID: {event['id']}")
+        apply_branding(ann_embed, thumbnail=False, author=True)
+        try:
+            if event.get("event_image"):
+                ann_embed.set_image(url=event["event_image"])
+                await ann_ch.send(content=f"📢 {mention}", embed=ann_embed)
+            elif os.path.exists(LOGO_DARK):
+                af = discord.File(LOGO_DARK, filename="banner.png")
+                ann_embed.set_image(url="attachment://banner.png")
+                await ann_ch.send(content=f"📢 {mention}", embed=ann_embed, file=af)
+            else:
+                await ann_ch.send(content=f"📢 {mention}", embed=ann_embed)
+        except Exception as e:
+            print(f"⚠️ Announcement channel error: {e}")
 
-    try:
+    # ── War-results channel: full details, NO ping ────────────────────
+    if war_ch and war_ch != ann_ch:
+        war_embed = discord.Embed(
+            title=f"🎪 NEW EVENT — {event['name']}",
+            description=event.get("description", ""),
+            color=ROYAL_GOLD,
+            timestamp=datetime.utcnow()
+        )
         if event.get("event_image"):
-            pub.set_image(url=event["event_image"])
-            await ann_ch.send(content=f"📢 {mention_text}", embed=pub)
-        elif os.path.exists(LOGO_DARK):
-            file = discord.File(LOGO_DARK, filename="banner.png")
-            pub.set_image(url="attachment://banner.png")
-            await ann_ch.send(content=f"📢 {mention_text}", embed=pub, file=file)
-        else:
-            await ann_ch.send(content=f"📢 {mention_text}", embed=pub)
-    except Exception as e:
-        print(f"⚠️ Could not announce event: {e}")
-
-    # Brief teaser to #war-results
-    try:
-        war_ch = discord.utils.get(guild.text_channels, name=ANNOUNCE_CHANNEL_NAME)
-        if war_ch and war_ch != ann_ch:
-            t_icon = {"tournament":"🏆","fun":"🎉","social":"🎉"}.get(event["type"],"🎪")
-            r_icon = {"solo":"👤","small_team":"👥","squad_5v5":"👑"}.get(
-                event.get("registration_mode","solo"), "")
-            teaser = discord.Embed(
-                title=f"🎪 NEW EVENT — {event['name']}",
-                description=(
-                    f"{t_icon} **{event['type'].title()}** | {r_icon} **{event.get('format','?')}**\n"
-                    f"📅 {event['date']}\n"
-                    + (f"💰 {event['prize_pool']}\n" if event.get("prize_pool") else "")
-                    + "\n*Use `/events` to see details & register!*"
-                ),
-                color=ROYAL_GOLD)
-            teaser.set_footer(text=f"⚜️ Full announcement in 『📢』Announcements | ID: {event['id']}")
-            apply_branding(teaser, thumbnail=True)
-            await war_ch.send(embed=teaser)
-    except Exception as e:
-        print(f"⚠️ Could not post event teaser: {e}")
+            war_embed.set_image(url=event["event_image"])
+        war_embed.add_field(name="📋 Type",       value=f"{type_icon} {type_label}", inline=True)
+        war_embed.add_field(name="⚔️ Format",     value=event.get("format", "?"),    inline=True)
+        war_embed.add_field(name="📅 Date",        value=event["date"],               inline=True)
+        war_embed.add_field(name="📝 Registration", value=rm_label,                   inline=True)
+        if event.get("max_entries"):
+            war_embed.add_field(name="🔢 Max",    value=str(event["max_entries"]),    inline=True)
+        if event.get("prize_pool"):
+            war_embed.add_field(name="💰 Prize",   value=event["prize_pool"],         inline=True)
+        if sys_label:
+            war_embed.add_field(name="🏆 Bracket", value=sys_label,                  inline=True)
+        if event.get("rules"):
+            war_embed.add_field(name="📜 Rules",   value=event["rules"][:1024],       inline=False)
+        war_embed.add_field(
+            name="📝 Register",
+            value=f"Type `/events` → select **{event['name']}** → **📝 Register**",
+            inline=False
+        )
+        war_embed.set_footer(text=f"⚜️ Majestic Dominion | Event ID: {event['id']}")
+        apply_branding(war_embed, thumbnail=False, author=True)
+        try:
+            if not event.get("event_image") and os.path.exists(LOGO_DARK):
+                wf = discord.File(LOGO_DARK, filename="banner.png")
+                war_embed.set_image(url="attachment://banner.png")
+                await war_ch.send(embed=war_embed, file=wf)
+            else:
+                await war_ch.send(embed=war_embed)
+        except Exception as e:
+            print(f"⚠️ War-results event error: {e}")
 
 
 class AddPrizePoolModal(Modal, title="💰 Add Prize Pool"):
