@@ -96,19 +96,25 @@ TOOLS_SCHEMA = [
 
 
 def _to_gemini_tools(schema):
+    """Convert tool schema to new google-genai format."""
+    from google.genai import types as gtypes
     declarations = []
     for t in schema:
         params = t.get("parameters", {})
         required = t.get("required", [])
         props = {}
         for pname, pinfo in params.items():
-            ptype = {"string":"STRING","integer":"INTEGER","boolean":"BOOLEAN","number":"NUMBER"}.get(pinfo.get("type","string"),"STRING")
-            props[pname] = genai.protos.Schema(type=getattr(genai.protos.Type, ptype), description=pinfo.get("description",""))
-        declarations.append(genai.protos.FunctionDeclaration(
-            name=t["name"], description=t["description"],
-            parameters=genai.protos.Schema(type=genai.protos.Type.OBJECT, properties=props, required=required)
+            ptype = {"string": gtypes.Type.STRING, "integer": gtypes.Type.INTEGER,
+                     "boolean": gtypes.Type.BOOLEAN, "number": gtypes.Type.NUMBER
+                     }.get(pinfo.get("type","string"), gtypes.Type.STRING)
+            props[pname] = gtypes.Schema(type=ptype, description=pinfo.get("description",""))
+        param_schema = gtypes.Schema(
+            type=gtypes.Type.OBJECT, properties=props, required=required
+        )
+        declarations.append(gtypes.FunctionDeclaration(
+            name=t["name"], description=t["description"], parameters=param_schema
         ))
-    return [genai.protos.Tool(function_declarations=declarations)]
+    return gtypes.Tool(function_declarations=declarations)
 
 
 def _to_groq_tools(schema):
@@ -122,19 +128,20 @@ class OracleAgent:
         self.squads     = squads_ref
         self.history    = defaultdict(list)
         self.rate_cache = defaultdict(list)
-        self.gemini_model = None
+        self.gemini_client = None
         self.groq_client  = None
 
         gkey = os.getenv("GEMINI_API_KEY")
         if GEMINI_AVAILABLE and gkey:
-            genai.configure(api_key=gkey)
             try:
-                self.gemini_model = genai.GenerativeModel(model_name=GEMINI_MODEL, tools=_to_gemini_tools(TOOLS_SCHEMA), system_instruction=ORACLE_PERSONALITY)
+                self.gemini_client = genai.Client(api_key=gkey)
                 print(f"\u2705 Oracle: Gemini ({GEMINI_MODEL}) ready — PRIMARY")
             except Exception as e:
                 print(f"\u274c Oracle Gemini init: {e}")
+                self.gemini_client = None
         else:
             print("\u26a0\ufe0f Oracle: No GEMINI_API_KEY")
+            self.gemini_client = None
 
         grkey = os.getenv("GROQ_API_KEY")
         if GROQ_AVAILABLE and grkey:
@@ -280,28 +287,61 @@ class OracleAgent:
             print(f"Oracle save error: {e}")
 
     async def _call_gemini(self, messages, guild, invoker):
-        if not self.gemini_model: raise RuntimeError("Gemini not configured")
+        if not self.gemini_client: raise RuntimeError("Gemini not configured")
+        from google.genai import types as gtypes
         context = self.build_context()
-        gemini_history = []
+
+        # Build conversation as a single prompt (new API uses contents list)
+        history_text = ""
         for m in messages[:-1]:
-            role = "user" if m["role"]=="user" else "model"
-            content = m["content"] if isinstance(m["content"],str) else str(m["content"])
-            gemini_history.append({"role":role,"parts":[content]})
+            role = "User" if m["role"] == "user" else "Oracle"
+            content = m["content"] if isinstance(m["content"], str) else str(m["content"])
+            history_text += f"{role}: {content}\n"
+
         last = messages[-1]["content"]
-        full_msg = f"[LIVE SERVER DATA]\n{context}\n\n[USER MESSAGE]\n{last}"
-        chat = self.gemini_model.start_chat(history=gemini_history)
-        current = full_msg
+        full_prompt = (
+            f"[SYSTEM]\n{ORACLE_PERSONALITY}\n\n"
+            f"[LIVE SERVER DATA]\n{context}\n\n"
+            + (f"[CONVERSATION HISTORY]\n{history_text}\n\n" if history_text else "")
+            + f"[USER MESSAGE]\n{last}"
+        )
+
+        tools = _to_gemini_tools(TOOLS_SCHEMA)
+        config = gtypes.GenerateContentConfig(
+            tools=[tools],
+            temperature=0.7,
+        )
+
         for _ in range(5):
-            response = await asyncio.get_event_loop().run_in_executor(None, lambda m=current: chat.send_message(m))
-            fn_calls = [p.function_call for p in response.parts if hasattr(p,"function_call") and p.function_call.name]
-            text_parts = [p.text for p in response.parts if hasattr(p,"text") and p.text]
-            if not fn_calls: return " ".join(text_parts) if text_parts else "*(no response)*"
-            tool_results = []
+            response = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda p=full_prompt: self.gemini_client.models.generate_content(
+                    model=GEMINI_MODEL, contents=p, config=config
+                )
+            )
+
+            # Check for function calls
+            fn_calls = []
+            text_parts = []
+            for part in response.candidates[0].content.parts:
+                if hasattr(part, "function_call") and part.function_call:
+                    fn_calls.append(part.function_call)
+                elif hasattr(part, "text") and part.text:
+                    text_parts.append(part.text)
+
+            if not fn_calls:
+                return " ".join(text_parts) if text_parts else "*(no response)*"
+
+            # Execute tools and build new prompt with results
+            tool_results_text = ""
             for fc in fn_calls:
                 args = dict(fc.args) if fc.args else {}
                 result = await self.execute_tool(fc.name, args, guild, invoker)
-                tool_results.append(genai.protos.Part(function_response=genai.protos.FunctionResponse(name=fc.name,response={"result":result})))
-            current = tool_results
+                tool_results_text += f"[TOOL: {fc.name}]\n{result}\n\n"
+
+            # Continue with tool results appended
+            full_prompt = full_prompt + f"\n\n[TOOL RESULTS]\n{tool_results_text}\nNow reply to the user based on these results."
+
         return "*(Oracle reached thinking limit)*"
 
     async def _call_groq(self, messages, guild, invoker):
