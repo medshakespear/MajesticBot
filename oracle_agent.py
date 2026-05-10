@@ -45,7 +45,7 @@ except ImportError:
 ORACLE_CHANNEL_NAME = "『🔮』royal-oracle"
 MOD_ORACLE_CHANNEL  = "『🛡️』mod-oracle"
 GEMINI_MODEL        = "gemini-2.0-flash"  # fallback
-GROQ_MODEL          = "llama-3.3-70b-versatile"  # primary
+GROQ_MODEL          = "llama3-groq-70b-8192-tool-use-preview"  # primary — optimized for tool use
 MAX_TOKENS          = 1024
 CONTEXT_MESSAGES    = 8
 RATE_LIMIT_SECONDS  = 6
@@ -383,6 +383,7 @@ Keep replies under 200 words. Be fun and engaging."""
                     messages=groq_msgs,
                     tools=groq_tools,
                     tool_choice="auto",
+                    parallel_tool_calls=False,
                     max_tokens=MAX_TOKENS,
                 )
             except Exception as e:
@@ -391,7 +392,13 @@ Keep replies under 200 words. Be fun and engaging."""
             choice = response.choices[0]
 
             if choice.finish_reason == "stop":
-                return choice.message.content or ""
+                text = choice.message.content or ""
+                # Strip any leaked raw function call text Groq sometimes outputs
+                import re
+                text = re.sub(r'<function=[^>]+>[^<]*</function>', '', text)
+                text = re.sub(r'<function=[^/]+/>', '', text)
+                text = text.strip()
+                return text if text else "*(no response)*"
 
             elif choice.finish_reason == "tool_calls" and choice.message.tool_calls:
                 # Build assistant message carefully
@@ -438,17 +445,17 @@ Keep replies under 200 words. Be fun and engaging."""
         history = self.history[user_id][-CONTEXT_MESSAGES:]
         messages = history + [{"role":"user","content":f"{username}: {text}"}]
         primary_err = None
-        # Groq is PRIMARY (truly free, no quota limits)
+        # Gemini is PRIMARY (free, 1500 req/day)
         try:
-            reply = await self._call_groq(messages, guild, invoker)
+            reply = await self._call_gemini(messages, guild, invoker)
         except Exception as e:
             primary_err = str(e)
-            print(f"\u26a0\ufe0f Oracle Groq error: {e}")
-            # Gemini as fallback
+            print(f"\u26a0\ufe0f Oracle Gemini error: {e}")
+            # Groq as fallback
             try:
-                reply = await self._call_gemini(messages, guild, invoker)
+                reply = await self._call_groq(messages, guild, invoker)
             except Exception as e2:
-                print(f"\u26a0\ufe0f Oracle Gemini fallback error: {e2}")
+                print(f"\u26a0\ufe0f Oracle Groq fallback error: {e2}")
                 return "\U0001f52e *The Oracle needs a moment to recover. Please try again shortly.*"
         self.history[user_id] = (messages+[{"role":"assistant","content":reply}])[-CONTEXT_MESSAGES*2:]
         return reply
