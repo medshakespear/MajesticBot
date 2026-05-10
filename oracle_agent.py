@@ -42,8 +42,8 @@ except ImportError:
     GROQ_AVAILABLE = False
     print("⚠️  groq not in requirements.txt")
 
-ORACLE_CHANNEL_NAME = "『🔮』 Royal Oracle"
-MOD_ORACLE_CHANNEL  = "『🛡️』 Mod Oracle"
+ORACLE_CHANNEL_NAME = "『🔮』royal-oracle"
+MOD_ORACLE_CHANNEL  = "『🛡️』mod-oracle"
 GEMINI_MODEL        = "gemini-2.0-flash"  # fallback
 GROQ_MODEL          = "llama-3.3-70b-versatile"  # primary
 MAX_TOKENS          = 1024
