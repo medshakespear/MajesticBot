@@ -44,8 +44,8 @@ except ImportError:
 
 ORACLE_CHANNEL_NAME = "『🔮』 Royal Oracle"
 MOD_ORACLE_CHANNEL  = "『🛡️』 Mod Oracle"
-GEMINI_MODEL        = "gemini-2.0-flash"
-GROQ_MODEL          = "llama-3.3-70b-versatile"
+GEMINI_MODEL        = "gemini-2.0-flash"  # fallback
+GROQ_MODEL          = "llama-3.3-70b-versatile"  # primary
 MAX_TOKENS          = 1024
 CONTEXT_MESSAGES    = 8
 RATE_LIMIT_SECONDS  = 6
@@ -135,7 +135,7 @@ class OracleAgent:
         if GEMINI_AVAILABLE and gkey:
             try:
                 self.gemini_client = genai.Client(api_key=gkey)
-                print(f"\u2705 Oracle: Gemini ({GEMINI_MODEL}) ready — PRIMARY")
+                print(f"\u2705 Oracle: Gemini ({GEMINI_MODEL}) ready — FALLBACK")
             except Exception as e:
                 print(f"\u274c Oracle Gemini init: {e}")
                 self.gemini_client = None
@@ -146,7 +146,7 @@ class OracleAgent:
         grkey = os.getenv("GROQ_API_KEY")
         if GROQ_AVAILABLE and grkey:
             self.groq_client = AsyncGroq(api_key=grkey)
-            print(f"\u2705 Oracle: Groq ({GROQ_MODEL}) ready — FALLBACK")
+            print(f"\u2705 Oracle: Groq ({GROQ_MODEL}) ready — PRIMARY")
         else:
             print("\u26a0\ufe0f Oracle: No GROQ_API_KEY (no fallback)")
 
@@ -367,15 +367,18 @@ class OracleAgent:
         history = self.history[user_id][-CONTEXT_MESSAGES:]
         messages = history + [{"role":"user","content":f"{username}: {text}"}]
         primary_err = None
+        # Groq is PRIMARY (truly free, no quota limits)
         try:
-            reply = await self._call_gemini(messages, guild, invoker)
+            reply = await self._call_groq(messages, guild, invoker)
         except Exception as e:
-            primary_err = str(e); print(f"\u26a0\ufe0f Oracle Gemini error: {e}")
+            primary_err = str(e)
+            print(f"\u26a0\ufe0f Oracle Groq error: {e}")
+            # Gemini as fallback
             try:
-                reply = await self._call_groq(messages, guild, invoker)
-                reply = f"*(Groq backup \u2014 {primary_err[:50]}...)*\n\n{reply}"
+                reply = await self._call_gemini(messages, guild, invoker)
             except Exception as e2:
-                return f"\U0001f52e *The Oracle\'s sight is clouded...*\nGemini: `{primary_err}`\nGroq: `{str(e2)}`\n\nCheck your API keys in Railway Variables."
+                print(f"\u26a0\ufe0f Oracle Gemini fallback error: {e2}")
+                return "\U0001f52e *The Oracle needs a moment to recover. Please try again shortly.*"
         self.history[user_id] = (messages+[{"role":"assistant","content":reply}])[-CONTEXT_MESSAGES*2:]
         return reply
 
