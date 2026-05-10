@@ -44,7 +44,7 @@ except ImportError:
 
 ORACLE_CHANNEL_NAME = "『🔮』royal-oracle"
 MOD_ORACLE_CHANNEL  = "『🛡️』mod-oracle"
-GEMINI_MODEL        = "gemini-2.0-flash"  # fallback
+GEMINI_MODEL        = "gemini-1.5-flash-latest"  # fallback
 GROQ_MODEL          = "llama3-groq-70b-8192-tool-use-preview"  # primary — optimized for tool use
 MAX_TOKENS          = 1024
 CONTEXT_MESSAGES    = 8
