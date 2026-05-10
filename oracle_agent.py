@@ -118,7 +118,28 @@ def _to_gemini_tools(schema):
 
 
 def _to_groq_tools(schema):
-    return [{"type":"function","function":{"name":t["name"],"description":t["description"],"parameters":{"type":"object","properties":{k:{"type":v.get("type","string"),"description":v.get("description","")} for k,v in t.get("parameters",{}).items()},"required":t.get("required",[])}}} for t in schema]
+    """Convert to Groq tool format — keep it simple, no enums."""
+    tools = []
+    for t in schema:
+        props = {}
+        for k, v in t.get("parameters", {}).items():
+            props[k] = {
+                "type": v.get("type", "string"),
+                "description": v.get("description", "")
+            }
+        tools.append({
+            "type": "function",
+            "function": {
+                "name": t["name"],
+                "description": t["description"],
+                "parameters": {
+                    "type": "object",
+                    "properties": props,
+                    "required": t.get("required", [])
+                }
+            }
+        })
+    return tools
 
 
 class OracleAgent:
@@ -347,21 +368,71 @@ class OracleAgent:
     async def _call_groq(self, messages, guild, invoker):
         if not self.groq_client: raise RuntimeError("Groq not configured")
         context = self.build_context()
-        system = ORACLE_PERSONALITY + "\n\nLIVE SERVER DATA:\n" + context
+        # Keep system prompt concise for Groq tool use reliability
+        short_personality = """You are the Royal Oracle of Majestic Dominion, an AI assistant for a Mobile Legends: Bang Bang Discord server.
+You are helpful, funny, and dramatic. Call members "warriors" and mods "the Royal Council".
+Use tools to get real data before answering. For write actions (record_match, create_event etc.) only execute if the user is a moderator.
+Keep replies under 200 words. Be fun and engaging."""
+        system = short_personality + "\n\nLIVE SERVER DATA:\n" + context
         groq_msgs = [{"role":"system","content":system}]+[{"role":m["role"] if m["role"] in ("user","assistant") else "user","content":m["content"] if isinstance(m["content"],str) else str(m["content"])} for m in messages]
         groq_tools = _to_groq_tools(TOOLS_SCHEMA)
-        for _ in range(5):
-            response = await self.groq_client.chat.completions.create(model=GROQ_MODEL,messages=groq_msgs,tools=groq_tools,max_tokens=MAX_TOKENS)
+        for attempt in range(5):
+            try:
+                response = await self.groq_client.chat.completions.create(
+                    model=GROQ_MODEL,
+                    messages=groq_msgs,
+                    tools=groq_tools,
+                    tool_choice="auto",
+                    max_tokens=MAX_TOKENS,
+                )
+            except Exception as e:
+                raise RuntimeError(f"Groq API error: {e}")
+
             choice = response.choices[0]
-            if choice.finish_reason=="stop": return choice.message.content or ""
-            elif choice.finish_reason=="tool_calls":
-                groq_msgs.append(choice.message.model_dump())
+
+            if choice.finish_reason == "stop":
+                return choice.message.content or ""
+
+            elif choice.finish_reason == "tool_calls" and choice.message.tool_calls:
+                # Build assistant message carefully
+                asst_msg = {
+                    "role": "assistant",
+                    "content": choice.message.content or "",
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments or "{}"
+                            }
+                        }
+                        for tc in choice.message.tool_calls
+                    ]
+                }
+                groq_msgs.append(asst_msg)
+
                 for tc in choice.message.tool_calls:
-                    args = json.loads(tc.function.arguments or "{}")
+                    try:
+                        raw_args = tc.function.arguments or "{}"
+                        # Clean up malformed args
+                        raw_args = raw_args.strip()
+                        if not raw_args or raw_args == "null":
+                            raw_args = "{}"
+                        args = json.loads(raw_args)
+                    except json.JSONDecodeError:
+                        args = {}
                     result = await self.execute_tool(tc.function.name, args, guild, invoker)
-                    groq_msgs.append({"role":"tool","tool_call_id":tc.id,"content":result})
-            else: break
-        return "*(Groq reached limit)*"
+                    groq_msgs.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": str(result)
+                    })
+            else:
+                # Unexpected finish reason — return whatever text we have
+                return choice.message.content or "*(no response)*"
+
+        return "*(Oracle reached thinking limit — try rephrasing your question)*"
 
     async def think(self, user_id, username, text, guild, channel, invoker):
         history = self.history[user_id][-CONTEXT_MESSAGES:]
