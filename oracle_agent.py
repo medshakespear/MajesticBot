@@ -387,7 +387,14 @@ def setup_oracle(bot, oracle):
     @bot.listen("on_message")
     async def oracle_listener(message):
         if message.author.bot: return
-        in_oracle = message.channel.name in (ORACLE_CHANNEL_NAME, MOD_ORACLE_CHANNEL)
+        # Flexible channel match — works regardless of exact emoji/spacing
+        ch_name_lower = message.channel.name.lower()
+        in_oracle = (
+            "oracle" in ch_name_lower or
+            "royal oracle" in ch_name_lower or
+            "mod oracle" in ch_name_lower or
+            message.channel.name in (ORACLE_CHANNEL_NAME, MOD_ORACLE_CHANNEL)
+        )
         is_mention = bot.user in message.mentions
         if not (in_oracle or is_mention): return
         limited, msg = oracle.is_rate_limited(message.author.id)
