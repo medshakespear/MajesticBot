@@ -10166,8 +10166,8 @@ async def events_command(interaction: discord.Interaction):
 # -------------------- EVENTS --------------------
 @bot.event
 async def on_ready():
-    await bot.tree.sync()
     setup_oracle(bot, oracle)
+    await bot.tree.sync()
     safety_sync.start()
     if not weekly_digest_task.is_running():
         weekly_digest_task.start()
