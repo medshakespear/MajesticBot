@@ -1,328 +1,85 @@
 # =====================================================================
-#       ORACLE AI AGENT — Majestic Dominion Discord Bot
-#       Primary: Google Gemini (FREE)
-#       Fallback: Groq / Llama (FREE)
-# =====================================================================
+#   ORACLE AI AGENT v2 — Majestic Dominion
+#   Primary: Groq (free) | Fallback: Gemini REST (free)
 #
-#  SETUP (3 minutes):
-#  ─────────────────────────────────────────────────────────────────
-#  1. Get Gemini API key (FREE):
-#       → aistudio.google.com → Sign in → Get API Key → Create
-#       → Key looks like: AIzaSy...
+#   SECURITY MODEL:
+#   ─────────────────────────────────────────────────────────────────
+#   mod-oracle channel  → Full control: read + ALL write actions
+#   royal-oracle channel → Read only: info, standings, help, chat
+#   @mention / /oracle  → Read only (treated as member)
 #
-#  2. Get Groq API key (FREE fallback):
-#       → console.groq.com → Sign up → API Keys → Create
-#       → Key looks like: gsk_...
+#   SETUP:
+#   ─────────────────────────────────────────────────────────────────
+#   requirements.txt → add: groq  aiohttp
+#   Railway Variables → GROQ_API_KEY=gsk_...  GEMINI_API_KEY=AIza...
 #
-#  3. Add to Railway Variables:
-#       GEMINI_API_KEY = AIzaSy...
-#       GROQ_API_KEY   = gsk_...
-#
-#  4. Add to requirements.txt:
-#       google-generativeai
-#       groq
-#
-#  5. Add to bot.py (3 lines):
-#       from oracle_agent import OracleAgent, setup_oracle        ← top
-#       oracle = OracleAgent(bot, squad_data, SQUADS)             ← after squad_data loads
-#       setup_oracle(bot, oracle)                                  ← inside on_ready()
-#
-#  6. Create two Discord channels:
-#       『🔮』Royal Oracle    ← public chat
-#       『🛡️』Mod Oracle      ← mod-only management
-#
-#  WHAT MEMBERS CAN DO:
-#  ─────────────────────────────────────────────────────────────────
-#  • Chat with the Oracle in 『🔮』Royal Oracle
-#  • Ask about standings, events, bounties, kingdoms
-#  • Ask how to register, how to play, how the server works
-#  • Roast enemies, hype teammates, get MLBB advice
-#  • Use /oracle anywhere in the server
-#
-#  WHAT MODS CAN DO (in 『🛡️』Mod Oracle or /oracle):
-#  ─────────────────────────────────────────────────────────────────
-#  • "Record Alpha beat Beta 2-0"
-#  • "Create a Hide & Seek event Saturday 9pm max 16 players"
-#  • "Add a 3 point bounty on Team X"
-#  • "Post an announcement: tournament starts tomorrow 8pm"
-#  • "Schedule Alpha vs Beta Sunday 9pm"
-#  • "Add PlayerX to the tournament"
-#  • "Close the 1v1 event"
-#  • "Who hasn't played in 2 weeks?"
-#  • "Give me a summary of this week"
-#  • "Suggest an event idea for the weekend"
+#   bot.py:
+#     from oracle_agent import OracleAgent, setup_oracle      ← top
+#     oracle = OracleAgent(bot, squad_data, SQUADS)           ← after squad_data
+#     setup_oracle(bot, oracle)                               ← inside on_ready() BEFORE tree.sync()
 # =====================================================================
 
-import os
-import json
-import asyncio
-import traceback
+import os, json, asyncio, re, uuid
 from datetime import datetime, timedelta
 from collections import defaultdict
-
 import discord
-from discord.ext import commands
 from discord import app_commands
-
-# ── API clients ───────────────────────────────────────────────────────
-try:
-    import google.generativeai as genai
-    GEMINI_AVAILABLE = True
-except ImportError:
-    GEMINI_AVAILABLE = False
-    print("⚠️  google-generativeai not installed. Add to requirements.txt")
 
 try:
     from groq import AsyncGroq
-    GROQ_AVAILABLE = True
+    GROQ_OK = True
 except ImportError:
-    GROQ_AVAILABLE = False
-    print("⚠️  groq not installed. Add to requirements.txt")
+    GROQ_OK = False
 
+try:
+    import aiohttp
+    AIOHTTP_OK = True
+except ImportError:
+    AIOHTTP_OK = False
 
-# ── Config ────────────────────────────────────────────────────────────
+# ── Channels ──────────────────────────────────────────────────────────
+MOD_ORACLE_CHANNEL   = "『🛡️』mod-oracle"    # any channel containing this → full mod access
+ROYAL_ORACLE_CHANNEL = "『🔮』royal-oracle"        # any channel containing this → read-only
 
-ORACLE_CHANNEL_NAME = "『🔮』royal-oracle"
-MOD_ORACLE_CHANNEL  = "『🛡️』mod-oracle"
+# ── Models ────────────────────────────────────────────────────────────
+GROQ_MODEL   = "llama-3.3-70b-versatile"
+GEMINI_MODEL = "gemini-2.0-flash-latest"
+MAX_TOKENS   = 400
 
-GEMINI_MODEL  = "gemini-2.5-flash"        # free, fast, smart
-GROQ_MODEL    = "llama-3.3-70b-versatile" # free, very capable fallback
-
-MAX_TOKENS          = 1024
-CONTEXT_MESSAGES    = 8     # conversation history kept per user
-RATE_LIMIT_SECONDS  = 6     # min seconds between requests per user
-RATE_LIMIT_PER_MIN  = 8     # max requests per minute per user
+# ── Rate limits ───────────────────────────────────────────────────────
+RATE_SEC = 12    # min seconds between requests per user
+RATE_MIN = 4     # max requests per minute per user
+DAILY_MAX = 80   # max requests per day globally (protects free tier)
+HISTORY  = 3     # messages kept per user (less = fewer tokens)   # messages kept per user
 
 # ── Personality ───────────────────────────────────────────────────────
-
-ORACLE_PERSONALITY = """
-You are the Royal Oracle of Majestic Dominion — the all-knowing AI soul
-living within this Mobile Legends: Bang Bang Discord server.
-
-YOUR PERSONALITY:
-- Royal, dramatic, slightly theatrical — you speak with gravitas and wisdom
-- Warm, funny, and occasionally sarcastic in a friendly way
-- You LOVE Mobile Legends and know everything about heroes, gameplay, and meta
-- You call members "warriors" and "sovereigns"
-- You call moderators "the Royal Council" or "Councillors"
-- You refer to yourself as "the Oracle" sometimes
-- You gently roast losing kingdoms but dramatically hype winners
-- You are GENUINELY useful — not just decorative
-
-YOUR CAPABILITIES:
-- Full access to live server data (standings, events, bounties, challenges)
-- You can TAKE REAL ACTIONS via tools (record matches, create events, etc.)
-- You help mods manage the server through natural conversation
-- You answer MLBB questions, give hero advice, discuss meta
-
-RESPONSE STYLE:
-- Keep replies under 250 words unless asked for detail
-- Use bold, emojis, and formatting to make replies feel alive
-- Be encouraging — this is a fun gaming community
-- When taking WRITE actions, always confirm what you did clearly
-- Never make up data — use your tools to get real information
-- Speak English but be understanding if members mix languages
-
-MLBB KNOWLEDGE:
-- You know all heroes, roles, meta strategies, and game modes
-- You know about ranked, classic, brawl, magic chess, custom rooms
-- You can give build advice, counter picks, and teamfight tips
-- You understand the server's custom modes: Hide & Seek, Protect Layla, 1v1, Kill Race
+PERSONALITY_MEMBER = """
+You are the Royal Oracle — the AI soul of the Majestic Dominion Discord server.
+You are witty, warm, playful, and genuinely fun to talk with.
+You're knowledgeable about everything: gaming, life, jokes, advice, the server.
+You call members "warrior" sometimes but you're not overly dramatic.
+You have a great sense of humor — you can be sarcastic, funny, or wholesome depending on the mood.
+You keep replies SHORT (under 150 words) unless asked for detail.
+You use the live server data below to answer questions accurately.
+You CANNOT make changes to the server — you're read-only for members.
+If someone asks you to do something that requires mod access, tell them to ask a mod.
 """
 
-# ── Tool definitions ──────────────────────────────────────────────────
-# Gemini uses a different format than Claude/OpenAI
-# We define tools as a list of dicts that we convert to Gemini format
-
-TOOLS_SCHEMA = [
-    {
-        "name": "get_standings",
-        "description": "Get current kingdom glory points rankings. Use when asked about leaderboard, rankings, top kingdoms, or who is winning.",
-        "parameters": {
-            "limit": {"type": "integer", "description": "How many kingdoms to return, default 10"}
-        }
-    },
-    {
-        "name": "get_events",
-        "description": "Get all events. Use when asked about tournaments, events, competitions, or registration.",
-        "parameters": {
-            "status": {"type": "string", "description": "Filter: open, live, completed, or all"}
-        }
-    },
-    {
-        "name": "get_event_details",
-        "description": "Get full details of a specific event including registrations and bracket.",
-        "parameters": {
-            "event_name": {"type": "string", "description": "Name of the event"}
-        },
-        "required": ["event_name"]
-    },
-    {
-        "name": "get_bounties",
-        "description": "Get the bounty board — which kingdoms have bounties and bonus points.",
-        "parameters": {}
-    },
-    {
-        "name": "get_challenges",
-        "description": "Get active challenges between kingdoms.",
-        "parameters": {
-            "status": {"type": "string", "description": "Filter: pending, accepted, scheduled, or all"}
-        }
-    },
-    {
-        "name": "get_squad_info",
-        "description": "Get detailed info about a specific kingdom: members, wins, losses, points, streak.",
-        "parameters": {
-            "kingdom_name": {"type": "string", "description": "Name of the kingdom"}
-        },
-        "required": ["kingdom_name"]
-    },
-    {
-        "name": "get_match_history",
-        "description": "Get recent match results.",
-        "parameters": {
-            "limit": {"type": "integer", "description": "Number of recent matches, default 5"},
-            "kingdom_name": {"type": "string", "description": "Filter by kingdom (optional)"}
-        }
-    },
-    {
-        "name": "record_match",
-        "description": "ACTION: Record a battle result between two kingdoms. Updates glory points. MOD ONLY.",
-        "parameters": {
-            "team1":  {"type": "string", "description": "Kingdom 1 name"},
-            "team2":  {"type": "string", "description": "Kingdom 2 name"},
-            "score":  {"type": "string", "description": "Score like 2-0 or 1-1"},
-            "winner": {"type": "string", "description": "Winning kingdom name, or 'draw'"}
-        },
-        "required": ["team1", "team2", "score", "winner"]
-    },
-    {
-        "name": "create_event",
-        "description": "ACTION: Create a new event. MOD ONLY.",
-        "parameters": {
-            "name":              {"type": "string",  "description": "Event name"},
-            "event_type":        {"type": "string",  "description": "tournament or fun"},
-            "format":            {"type": "string",  "description": "e.g. 1v1, Hide & Seek"},
-            "date":              {"type": "string",  "description": "Date and time"},
-            "description":       {"type": "string",  "description": "Short description"},
-            "registration_mode": {"type": "string",  "description": "solo, small_team, or squad_5v5"},
-            "max_entries":       {"type": "integer", "description": "Max participants"},
-            "prize_pool":        {"type": "string",  "description": "Prize description"}
-        },
-        "required": ["name", "event_type", "format", "date", "description"]
-    },
-    {
-        "name": "close_event",
-        "description": "ACTION: Close an active event. MOD ONLY.",
-        "parameters": {
-            "event_name": {"type": "string", "description": "Event name to close"}
-        },
-        "required": ["event_name"]
-    },
-    {
-        "name": "add_bounty",
-        "description": "ACTION: Add a bounty to a kingdom. MOD ONLY.",
-        "parameters": {
-            "kingdom_name": {"type": "string",  "description": "Kingdom to put bounty on"},
-            "points":       {"type": "integer", "description": "Bonus glory points"}
-        },
-        "required": ["kingdom_name", "points"]
-    },
-    {
-        "name": "post_announcement",
-        "description": "ACTION: Post an announcement to the server. MOD ONLY.",
-        "parameters": {
-            "title":   {"type": "string", "description": "Announcement title"},
-            "message": {"type": "string", "description": "Full announcement text"}
-        },
-        "required": ["title", "message"]
-    },
-    {
-        "name": "schedule_match",
-        "description": "ACTION: Schedule a match between two kingdoms with a date.",
-        "parameters": {
-            "team1":     {"type": "string", "description": "Kingdom 1"},
-            "team2":     {"type": "string", "description": "Kingdom 2"},
-            "date_time": {"type": "string", "description": "When the match is scheduled"}
-        },
-        "required": ["team1", "team2", "date_time"]
-    },
-    {
-        "name": "add_registrant",
-        "description": "ACTION: Manually add a player or team to an event. MOD ONLY.",
-        "parameters": {
-            "event_name":       {"type": "string", "description": "Event name"},
-            "participant_name": {"type": "string", "description": "Player or team name"}
-        },
-        "required": ["event_name", "participant_name"]
-    },
-    {
-        "name": "get_help",
-        "description": "Get info about bot commands and features.",
-        "parameters": {
-            "topic": {"type": "string", "description": "Topic: events, matches, rankings, challenges, social, or general"}
-        }
-    },
-]
+PERSONALITY_MOD = """
+You are the Royal Oracle — the AI management assistant of Majestic Dominion Discord server.
+You are smart, efficient, and helpful for server management.
+You still have personality — witty and fun — but you prioritize being USEFUL to moderators.
+You have FULL control over the server: you can record matches, create events, manage bounties,
+post announcements, schedule matches, manage registrations, and more.
+You keep replies concise and clear — mods are busy.
+When you perform an action, confirm it clearly and briefly.
+You use the live server data below to make informed decisions.
+"""
 
 
-def _to_gemini_tools(schema):
-    """Convert our tool schema to Gemini FunctionDeclaration format."""
-    from google.generativeai.types import content_types
-    declarations = []
-    for t in schema:
-        params = t.get("parameters", {})
-        required = t.get("required", [])
-        props = {}
-        for pname, pinfo in params.items():
-            ptype = pinfo.get("type", "string")
-            gemini_type = {
-                "string": "STRING", "integer": "INTEGER",
-                "boolean": "BOOLEAN", "number": "NUMBER"
-            }.get(ptype, "STRING")
-            props[pname] = genai.protos.Schema(
-                type=getattr(genai.protos.Type, gemini_type),
-                description=pinfo.get("description", "")
-            )
-        param_schema = genai.protos.Schema(
-            type=genai.protos.Type.OBJECT,
-            properties=props,
-            required=required
-        )
-        declarations.append(genai.protos.FunctionDeclaration(
-            name=t["name"],
-            description=t["description"],
-            parameters=param_schema
-        ))
-    return [genai.protos.Tool(function_declarations=declarations)]
-
-
-def _to_groq_tools(schema):
-    """Convert our schema to Groq/OpenAI tool format."""
-    tools = []
-    for t in schema:
-        params = t.get("parameters", {})
-        required = t.get("required", [])
-        props = {
-            k: {"type": v.get("type","string"), "description": v.get("description","")}
-            for k, v in params.items()
-        }
-        tools.append({
-            "type": "function",
-            "function": {
-                "name": t["name"],
-                "description": t["description"],
-                "parameters": {
-                    "type": "object",
-                    "properties": props,
-                    "required": required
-                }
-            }
-        })
-    return tools
-
-
-# ── OracleAgent ───────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════
+#  OracleAgent
+# ═════════════════════════════════════════════════════════════════════
 
 class OracleAgent:
 
@@ -332,624 +89,797 @@ class OracleAgent:
         self.squads     = squads_ref
         self.history    = defaultdict(list)
         self.rate_cache = defaultdict(list)
+        self.daily_log  = []  # global daily request tracker
 
-        # Init Gemini
-        self.gemini_model = None
-        gemini_key = os.getenv("GEMINI_API_KEY")
-        if GEMINI_AVAILABLE and gemini_key:
-            genai.configure(api_key=gemini_key)
-            try:
-                self.gemini_model = genai.GenerativeModel(
-                    model_name=GEMINI_MODEL,
-                    tools=_to_gemini_tools(TOOLS_SCHEMA),
-                    system_instruction=ORACLE_PERSONALITY,
-                )
-                print(f"✅ Oracle: Gemini ({GEMINI_MODEL}) ready — PRIMARY")
-            except Exception as e:
-                print(f"❌ Oracle: Gemini init failed: {e}")
+        # Groq
+        self.groq = None
+        gk = os.getenv("GROQ_API_KEY")
+        if GROQ_OK and gk:
+            self.groq = AsyncGroq(api_key=gk)
+            print(f"✅ Oracle: Groq ({GROQ_MODEL}) ready")
         else:
-            print("⚠️  Oracle: No GEMINI_API_KEY set")
+            print("⚠️  Oracle: No GROQ_API_KEY")
 
-        # Init Groq
-        self.groq_client = None
-        groq_key = os.getenv("GROQ_API_KEY")
-        if GROQ_AVAILABLE and groq_key:
-            self.groq_client = AsyncGroq(api_key=groq_key)
-            print(f"✅ Oracle: Groq ({GROQ_MODEL}) ready — FALLBACK")
+        # Gemini
+        self.gemini_key = os.getenv("GEMINI_API_KEY")
+        if self.gemini_key:
+            print(f"✅ Oracle: Gemini ({GEMINI_MODEL}) ready as fallback")
         else:
-            print("⚠️  Oracle: No GROQ_API_KEY set (no fallback)")
-
-        if not self.gemini_model and not self.groq_client:
-            print("❌ Oracle: No AI configured — add GEMINI_API_KEY to Railway Variables")
+            print("⚠️  Oracle: No GEMINI_API_KEY")
 
     # ── Rate limiting ─────────────────────────────────────────────────
 
-    def is_rate_limited(self, user_id: int) -> tuple[bool, str]:
-        now    = datetime.utcnow()
-        cutoff = now - timedelta(seconds=60)
-        recent = [t for t in self.rate_cache[user_id] if t > cutoff]
-        self.rate_cache[user_id] = recent
+    def is_limited(self, uid):
+        now  = datetime.utcnow()
+        cut  = now - timedelta(seconds=60)
+        dcut = now - timedelta(hours=24)
 
-        if recent and (now - recent[-1]).total_seconds() < RATE_LIMIT_SECONDS:
-            wait = int(RATE_LIMIT_SECONDS - (now - recent[-1]).total_seconds()) + 1
-            return True, f"⏳ *Patience, warrior. The Oracle recovers in **{wait}s**...*"
-        if len(recent) >= RATE_LIMIT_PER_MIN:
-            return True, "🔮 *The Oracle needs a moment. Try again shortly.*"
+        # Per-user rate limit
+        r = [t for t in self.rate_cache[uid] if t > cut]
+        self.rate_cache[uid] = r
+        if r and (now - r[-1]).total_seconds() < RATE_SEC:
+            w = int(RATE_SEC - (now - r[-1]).total_seconds()) + 1
+            return True, f"⏳ Give me **{w}s**, then ask again."
+        if len(r) >= RATE_MIN:
+            return True, "🔮 Too many questions at once — wait a minute."
 
-        self.rate_cache[user_id].append(now)
+        # Global daily budget
+        self.daily_log = [t for t in getattr(self, "daily_log", []) if t > dcut]
+        if len(self.daily_log) >= DAILY_MAX:
+            return True, "🔮 The Oracle has reached its daily limit. Try again tomorrow."
+
+        self.rate_cache[uid].append(now)
+        self.daily_log.append(now)
         return False, ""
 
-    # ── Live server context ───────────────────────────────────────────
+    def usage_stats(self):
+        now  = datetime.utcnow()
+        dcut = now - timedelta(hours=24)
+        used = len([t for t in getattr(self,"daily_log",[]) if t > dcut])
+        return used, DAILY_MAX
 
-    def build_context(self) -> str:
-        sd     = self.squad_data
-        squads = sd.get("squads", {})
-        now    = datetime.utcnow().strftime("%A %B %d %Y %H:%M UTC")
+    # ── Context ───────────────────────────────────────────────────────
 
-        # Top 10 rankings
-        ranked = sorted(squads.items(), key=lambda x: -x[1].get("points",0))
-        rank_lines = []
-        for i, (name, info) in enumerate(ranked[:10], 1):
-            tag    = self.squads.get(name, "⚔️")
-            w,d,l  = info.get("wins",0), info.get("draws",0), info.get("losses",0)
-            pts    = info.get("points",0)
-            streak = info.get("streak",0)
-            s_txt  = f" 🔥x{streak}" if streak >= 3 else ""
-            rank_lines.append(f"  #{i} {tag} {name} — {pts}pts ({w}W/{d}D/{l}L){s_txt}")
+    def context(self):
+        sd = self.squad_data
+        sq = sd.get("squads", {})
 
-        # Active events
-        events   = sd.get("events", [])
-        open_evs = [e for e in events if e["status"] in ("open","live")]
-        ev_lines = []
-        for ev in open_evs[:5]:
-            rc = len(ev.get("registrations",[]))
-            mx = f"/{ev['max_entries']}" if ev.get("max_entries") else ""
-            ev_lines.append(f"  • {ev['name']} [{ev['status'].upper()}] {ev.get('format','?')} 👥{rc}{mx} 📅{ev.get('date','?')}")
-
-        # Bounties
-        bounties = sd.get("bounties", {})
-        b_lines  = [f"  • {k}: +{v.get('points',0)}pts" for k,v in list(bounties.items())[:5]]
-
-        # Challenges
-        challs  = [c for c in sd.get("challenges",[]) if c["status"] in ("pending","accepted","scheduled")]
-        c_lines = [
-            f"  • {c['challenger']} vs {c['challenged']} [{c['status']}]"
-            + (f" {c['scheduled_date']}" if c.get("scheduled_date") else "")
-            for c in challs[:5]
-        ]
-
-        # Recent matches
-        recent = sd.get("matches",[])[-5:][::-1]
-        m_lines = []
-        for m in recent:
-            t1 = self.squads.get(m.get("team1",""),"") + " " + m.get("team1","?")
-            t2 = self.squads.get(m.get("team2",""),"") + " " + m.get("team2","?")
-            w  = m.get("winner","draw")
-            m_lines.append(f"  • {t1} {m.get('score','?')} {t2} → {w}")
-
-        def section(title, lines, empty="  None."):
-            return f"\n{title}\n" + ("\n".join(lines) if lines else empty)
-
-        return (
-            f"═══ MAJESTIC DOMINION LIVE DATA — {now} ═══"
-            + section("🏆 RANKINGS:", rank_lines)
-            + section("🎪 ACTIVE EVENTS:", ev_lines)
-            + section("💰 BOUNTIES:", b_lines)
-            + section("⚔️ CHALLENGES:", c_lines)
-            + section("📜 RECENT MATCHES:", m_lines)
-            + f"\n═══ Total: {len(squads)} kingdoms · {len(sd.get('matches',[]))} matches played ═══"
+        top = sorted(sq.items(), key=lambda x: -x[1].get("points", 0))
+        rankings = " | ".join(
+            f"#{i} {n}:{v.get('points',0)}pts {v.get('wins',0)}W/{v.get('losses',0)}L str:{v.get('streak',0)}"
+            for i,(n,v) in enumerate(top[:8], 1)
         )
 
-    # ── Tool execution ────────────────────────────────────────────────
+        evs = sd.get("events", [])
+        events = " | ".join(
+            f"{e['name']}[{e['status']}]{e.get('format','')} {len(e.get('registrations',[]))}reg/{e.get('max_entries','∞')} date:{e.get('date','?')}"
+            for e in evs if e["status"] in ("open","live")
+        ) or "none"
 
-    async def execute_tool(self, name: str, args: dict, guild, invoker) -> str:
-        sd = self.squad_data
+        all_evs = " | ".join(
+            f"{e['name']}[{e['status']}]id:{e['id']}"
+            for e in evs
+        ) or "none"
 
-        def is_mod():
-            member = guild.get_member(invoker.id) if guild else None
-            return member and any(
-                r.name in ("KNIGHTS","Admin","Moderator","LEADER")
-                for r in member.roles
+        bounties = " | ".join(
+            f"{k}:+{v.get('points',0)}pts"
+            for k,v in list(sd.get("bounties",{}).items())
+        ) or "none"
+
+        challs = " | ".join(
+            f"{c['challenger']} vs {c['challenged']}[{c['status']}]"
+            for c in sd.get("challenges",[])
+            if c["status"] in ("pending","accepted","scheduled")
+        ) or "none"
+
+        recent = " | ".join(
+            f"{m.get('team1','?')} {m.get('score','?')} {m.get('team2','?')}->{m.get('winner','draw')}"
+            for m in sd.get("matches",[])[-5:][::-1]
+        ) or "none"
+
+        sq_names = ", ".join(list(sq.keys())[:20])
+
+        return (
+            f"[SERVER DATA]\n"
+            f"Kingdoms({len(sq)}): {sq_names}\n"
+            f"Rankings: {rankings}\n"
+            f"ActiveEvents: {events}\n"
+            f"AllEvents: {all_evs}\n"
+            f"Bounties: {bounties}\n"
+            f"Challenges: {challs}\n"
+            f"RecentMatches: {recent}\n"
+            f"TotalMatches: {len(sd.get('matches',[]))}"
+        )
+
+    # ── Action parser & executor (mod-only) ───────────────────────────
+
+    async def _detect_and_execute(self, text: str, guild, invoker) -> str | None:
+        """
+        Detect write actions from natural language and execute them.
+        Returns a result string if an action was taken, else None.
+        """
+        t   = text.lower().strip()
+        sd  = self.squad_data
+        sq  = sd.get("squads", {})
+
+        def fuzzy(name, d):
+            name = name.lower().strip()
+            # exact first
+            for k in d:
+                if k.lower() == name: return k
+            # partial
+            for k in d:
+                if name in k.lower(): return k
+            return None
+
+        def save():
+            try:
+                import sys
+                m = sys.modules.get("__main__")
+                if m and hasattr(m, "save_data"):
+                    m.save_data(sd)
+            except: pass
+
+        async def to_channel(name, embed):
+            ch = discord.utils.get(guild.text_channels, name=name)
+            if ch:
+                try: await ch.send(embed=embed)
+                except: pass
+
+        # ── record match ──────────────────────────────────────────────
+        # patterns: "record X beat Y 2-0" / "X won against Y 1-0" / "X vs Y X won 2-1"
+        m = re.search(
+            r'(?:record|log)?\s*([a-z0-9 ]+?)\s+(?:beat|beats|won|defeated|def\.?)\s+([a-z0-9 ]+?)\s+(\d+-\d+)',
+            t, re.I
+        )
+        if not m:
+            m = re.search(
+                r'(?:record|log)?\s*([a-z0-9 ]+?)\s+vs\.?\s+([a-z0-9 ]+?)\s+(\d+-\d+)\s+([a-z0-9 ]+?)\s+(?:won|wins)',
+                t, re.I
             )
-
-        def fuzzy(target, d):
-            return next((k for k in d if target.lower() in k.lower()), None)
-
-        try:
-            # ── READ ──────────────────────────────────────────────────
-
-            if name == "get_standings":
-                limit  = int(args.get("limit", 10))
-                ranked = sorted(sd.get("squads",{}).items(),
-                                key=lambda x: -x[1].get("points",0))[:limit]
-                lines  = [
-                    f"#{i} {self.squads.get(n,'⚔️')} {n}: "
-                    f"{v.get('points',0)}pts "
-                    f"({v.get('wins',0)}W/{v.get('draws',0)}D/{v.get('losses',0)}L) "
-                    f"streak:{v.get('streak',0)}"
-                    for i,(n,v) in enumerate(ranked,1)
-                ]
-                return "STANDINGS:\n" + "\n".join(lines)
-
-            elif name == "get_events":
-                status = args.get("status","all")
-                evs = sd.get("events",[])
-                if status != "all":
-                    evs = [e for e in evs if e["status"] == status]
-                if not evs:
-                    return f"No events found (status={status})."
-                lines = [
-                    f"• [{e['id']}] {e['name']} | {e['type']} {e.get('format','?')} "
-                    f"| Status:{e['status']} | Reg:{len(e.get('registrations',[]))} | Date:{e.get('date','?')}"
-                    for e in evs
-                ]
-                return "EVENTS:\n" + "\n".join(lines)
-
-            elif name == "get_event_details":
-                ev_name = args.get("event_name","")
-                ev = next((e for e in sd.get("events",[]) if ev_name.lower() in e["name"].lower()), None)
-                if not ev:
-                    return f"Event not found: {ev_name}"
-                regs = [
-                    r.get("team_name") or r.get("player_name") or "?"
-                    for r in ev.get("registrations",[])
-                ]
-                return json.dumps({
-                    "name": ev["name"], "type": ev["type"],
-                    "format": ev.get("format"), "status": ev["status"],
-                    "date": ev.get("date"), "description": ev.get("description"),
-                    "prize_pool": ev.get("prize_pool"), "max_entries": ev.get("max_entries"),
-                    "registrations": regs, "total_reg": len(regs),
-                    "has_bracket": ev.get("bracket_data") is not None,
-                    "champion": ev.get("champion"), "rules": ev.get("rules"),
-                }, indent=2)
-
-            elif name == "get_bounties":
-                b = sd.get("bounties",{})
-                if not b:
-                    return "No active bounties."
-                return "BOUNTIES:\n" + "\n".join(
-                    f"• {k}: +{v.get('points',0)}pts" for k,v in b.items()
-                )
-
-            elif name == "get_challenges":
-                status = args.get("status","all")
-                challs = sd.get("challenges",[])
-                if status != "all":
-                    challs = [c for c in challs if c["status"] == status]
-                if not challs:
-                    return "No challenges found."
-                return "CHALLENGES:\n" + "\n".join(
-                    f"• {c['challenger']} vs {c['challenged']} [{c['status']}]"
-                    + (f" @ {c['scheduled_date']}" if c.get("scheduled_date") else "")
-                    for c in challs
-                )
-
-            elif name == "get_squad_info":
-                kname   = args.get("kingdom_name","")
-                squads  = sd.get("squads",{})
-                matched = fuzzy(kname, squads)
-                if not matched:
-                    return f"Kingdom not found: {kname}. Try: {', '.join(list(squads.keys())[:8])}"
-                info = squads[matched]
-                return json.dumps({
-                    "name": matched, "tag": self.squads.get(matched,"⚔️"),
-                    "points": info.get("points",0),
-                    "wins": info.get("wins",0), "draws": info.get("draws",0),
-                    "losses": info.get("losses",0), "streak": info.get("streak",0),
-                    "main_roster_size": len(info.get("main_roster",[])),
-                    "achievements": info.get("achievements",[]),
-                }, indent=2)
-
-            elif name == "get_match_history":
-                limit   = int(args.get("limit",5))
-                kfilter = args.get("kingdom_name","").lower()
-                matches = sd.get("matches",[])
-                if kfilter:
-                    matches = [m for m in matches
-                               if kfilter in m.get("team1","").lower()
-                               or kfilter in m.get("team2","").lower()]
-                recent = matches[-limit:][::-1]
-                if not recent:
-                    return "No matches found."
-                return "MATCH HISTORY:\n" + "\n".join(
-                    f"• {m.get('team1','?')} {m.get('score','?')} {m.get('team2','?')} "
-                    f"→ {m.get('winner','draw')} [{m.get('date','?')}]"
-                    for m in recent
-                )
-
-            elif name == "get_help":
-                topic = args.get("topic","general")
-                help_map = {
-                    "general":    "/member · /leader · /mod · /events · /oracle · /profile · /help",
-                    "matches":    "/mod → Record Battle → pick teams → enter score → auto-updates glory points",
-                    "events":     "/events to browse and register · /mod → Events to manage (create, start, bracket, etc.)",
-                    "rankings":   "/member → Rankings · Updates after every recorded match",
-                    "challenges": "/leader → Challenge Kingdom · Mod schedules and records results",
-                    "social":     "Social events: /mod → Events → Record Match → opens social panel with rounds & leaderboard",
-                }
-                return f"HELP ({topic}):\n{help_map.get(topic, help_map['general'])}"
-
-            # ── WRITE ─────────────────────────────────────────────────
-
-            elif name == "record_match":
-                if not is_mod():
-                    return "❌ Permission denied. Only moderators can record matches."
-                t1     = args["team1"]
-                t2     = args["team2"]
-                score  = args["score"]
-                winner = args["winner"]
-                squads = sd.get("squads",{})
-                t1m    = fuzzy(t1, squads)
-                t2m    = fuzzy(t2, squads)
-                if not t1m or not t2m:
-                    return f"❌ Kingdom not found. Got: '{t1}'→'{t1m}', '{t2}'→'{t2m}'. Available: {', '.join(list(squads.keys())[:8])}"
-                WIN_PTS = 3; DRAW_PTS = 1
-                if winner.lower() == "draw":
-                    for k in [t1m, t2m]:
-                        squads[k]["draws"]  = squads[k].get("draws",0) + 1
-                        squads[k]["points"] = squads[k].get("points",0) + DRAW_PTS
-                    summary = f"Draw — both get +{DRAW_PTS}pts"
-                else:
-                    wm = fuzzy(winner, squads)
-                    if not wm:
-                        return f"❌ Winner '{winner}' not found."
-                    lm = t2m if wm == t1m else t1m
-                    squads[wm]["wins"]   = squads[wm].get("wins",0) + 1
-                    squads[wm]["points"] = squads[wm].get("points",0) + WIN_PTS
-                    squads[wm]["streak"] = squads[wm].get("streak",0) + 1
-                    squads[lm]["losses"] = squads[lm].get("losses",0) + 1
-                    squads[lm]["streak"] = 0
-                    summary = f"{wm} wins +{WIN_PTS}pts · {lm} loss"
-                match_id = len(sd.get("matches",[])) + 1
+        if m:
+            raw_w  = m.group(1).strip()
+            raw_l  = m.group(2).strip()
+            score  = m.group(3).strip()
+            wm = fuzzy(raw_w, sq)
+            lm = fuzzy(raw_l, sq)
+            if wm and lm and wm != lm:
+                sq[wm]["wins"]   = sq[wm].get("wins",0) + 1
+                sq[wm]["points"] = sq[wm].get("points",0) + 3
+                sq[wm]["streak"] = sq[wm].get("streak",0) + 1
+                sq[lm]["losses"] = sq[lm].get("losses",0) + 1
+                sq[lm]["streak"] = 0
                 sd.setdefault("matches",[]).append({
-                    "id": match_id, "team1": t1m, "team2": t2m,
-                    "score": score, "winner": winner.lower(),
-                    "date": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+                    "id": len(sd.get("matches",[]))+1,
+                    "team1": wm, "team2": lm, "score": score,
+                    "winner": wm, "date": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
                     "recorded_by": str(invoker.id), "source": "oracle"
                 })
-                self._save()
-                return f"✅ Recorded: {t1m} {score} {t2m} | {summary}"
+                save()
+                embed = discord.Embed(
+                    title="⚔️ BATTLE RECORDED",
+                    description=f"**{wm}** defeated **{lm}** — **{score}**\n+3 Glory Points for {wm}",
+                    color=0xffd700, timestamp=datetime.utcnow()
+                )
+                await to_channel("war-results", embed)
+                return f"✅ Recorded: **{wm}** beat **{lm}** {score} — glory points updated & posted to war-results."
+            elif not wm or not lm:
+                missing = raw_w if not wm else raw_l
+                return f"❌ Kingdom not found: **{missing}**. Available: {', '.join(list(sq.keys())[:10])}"
 
-            elif name == "create_event":
-                if not is_mod():
-                    return "❌ Permission denied. Only moderators can create events."
-                import uuid
-                eid = str(uuid.uuid4())[:8]
-                ev  = {
-                    "id": eid,
-                    "name":              args["name"],
-                    "type":              args.get("event_type","tournament"),
-                    "format":            args["format"],
-                    "date":              args["date"],
-                    "description":       args["description"],
-                    "registration_mode": args.get("registration_mode","solo"),
-                    "max_entries":       args.get("max_entries") or None,
-                    "prize_pool":        args.get("prize_pool",""),
-                    "status":            "open",
-                    "registrations":     [], "bracket_data": None, "schedule": [],
-                    "tournament_system": "single_elim" if args.get("event_type")=="tournament" else None,
-                    "created_by":        str(invoker.id),
-                    "created_at":        datetime.utcnow().isoformat(),
-                }
-                sd.setdefault("events",[]).append(ev)
-                self._save()
-                return (f"✅ Event created: **{ev['name']}** (ID: {eid})\n"
-                        f"Type:{ev['type']} Format:{ev['format']} Date:{ev['date']} Status:OPEN")
+        # ── draw ─────────────────────────────────────────────────────
+        m = re.search(r'draw\s+(?:between\s+)?([a-z0-9 ]+?)\s+(?:and|vs)\s+([a-z0-9 ]+?)(?:\s+(\d+-\d+))?$', t, re.I)
+        if m:
+            t1m = fuzzy(m.group(1).strip(), sq)
+            t2m = fuzzy(m.group(2).strip(), sq)
+            score = m.group(3) or "1-1"
+            if t1m and t2m:
+                for k in [t1m, t2m]:
+                    sq[k]["draws"]  = sq[k].get("draws",0) + 1
+                    sq[k]["points"] = sq[k].get("points",0) + 1
+                sd.setdefault("matches",[]).append({
+                    "id": len(sd.get("matches",[]))+1,
+                    "team1": t1m, "team2": t2m, "score": score,
+                    "winner": "draw", "date": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+                    "recorded_by": str(invoker.id), "source": "oracle"
+                })
+                save()
+                return f"✅ Draw recorded: **{t1m}** vs **{t2m}** {score} — both +1pt."
 
-            elif name == "close_event":
-                if not is_mod():
-                    return "❌ Permission denied."
-                ename = args["event_name"].lower()
-                ev    = next((e for e in sd.get("events",[]) if ename in e["name"].lower()), None)
-                if not ev:
-                    return f"❌ Event not found: {args['event_name']}"
-                ev["status"] = "completed"
-                self._save()
-                return f"✅ Event '{ev['name']}' closed."
-
-            elif name == "add_bounty":
-                if not is_mod():
-                    return "❌ Permission denied."
-                kname   = args["kingdom_name"]
-                pts     = int(args.get("points",2))
-                squads  = sd.get("squads",{})
-                matched = fuzzy(kname, squads)
-                if not matched:
-                    return f"❌ Kingdom not found: {kname}"
-                sd.setdefault("bounties",{})[matched] = {
+        # ── add bounty ────────────────────────────────────────────────
+        m = re.search(r'(?:add|put|set)\s+(?:a\s+)?(?:(\d+)\s+(?:point|pt)s?\s+)?bounty\s+on\s+([a-z0-9 ]+?)(?:\s+(\d+)\s+(?:point|pt)s?)?', t, re.I)
+        if m:
+            pts  = int(m.group(1) or m.group(3) or 2)
+            name = (m.group(2) or "").strip()
+            km   = fuzzy(name, sq)
+            if km:
+                sd.setdefault("bounties",{})[km] = {
                     "points": pts, "reason": "Added via Oracle",
                     "added_at": datetime.utcnow().isoformat()
                 }
-                self._save()
-                return f"✅ Bounty set: {matched} — +{pts}pts for defeating them."
+                save()
+                return f"✅ Bounty set: **{km}** — +{pts} pts for anyone who defeats them."
+            return f"❌ Kingdom not found: **{name}**"
 
-            elif name == "post_announcement":
-                if not is_mod():
-                    return "❌ Permission denied."
-                ann_ch = discord.utils.get(guild.text_channels, name="『📢』𝐀𝐧𝐧𝐨𝐮𝐧𝐜𝐞𝐦𝐞𝐧𝐭𝐬")
-                if not ann_ch:
-                    return "❌ Announcements channel not found. Check channel name."
+        # ── remove bounty ─────────────────────────────────────────────
+        m = re.search(r'(?:remove|clear|delete)\s+bounty\s+(?:on\s+|from\s+)?([a-z0-9 ]+)', t, re.I)
+        if m:
+            name = m.group(1).strip()
+            km   = fuzzy(name, sd.get("bounties",{}))
+            if km:
+                sd.get("bounties",{}).pop(km, None)
+                save()
+                return f"✅ Bounty removed from **{km}**."
+            return f"❌ No bounty found for: **{name}**"
+
+        # ── create event ──────────────────────────────────────────────
+        m = re.search(r'create\s+(?:an?\s+)?event\s+(?:called\s+|named\s+)?["\']?([^"\']+?)["\']?\s+(?:on\s+|for\s+|at\s+|date\s*:?\s*)([^,]+?)(?:\s+format\s*:?\s*([^\s,]+))?(?:\s+max\s*:?\s*(\d+))?$', t, re.I)
+        if m:
+            name = m.group(1).strip()
+            date = m.group(2).strip()
+            fmt  = m.group(3) or "TBD"
+            mx   = int(m.group(4)) if m.group(4) else None
+            eid  = str(uuid.uuid4())[:8]
+            ev   = {
+                "id": eid, "name": name, "type": "tournament",
+                "format": fmt, "date": date, "description": f"Created via Oracle by {invoker.display_name}",
+                "registration_mode": "solo", "max_entries": mx,
+                "prize_pool": "", "status": "open",
+                "registrations": [], "bracket_data": None, "schedule": [],
+                "tournament_system": "single_elim",
+                "created_by": str(invoker.id),
+                "created_at": datetime.utcnow().isoformat()
+            }
+            sd.setdefault("events",[]).append(ev)
+            save()
+            embed = discord.Embed(
+                title=f"🎪 NEW EVENT — {name}",
+                description=f"Format: {fmt} | Date: {date}" + (f" | Max: {mx}" if mx else ""),
+                color=0xffd700, timestamp=datetime.utcnow()
+            )
+            await to_channel("war-results", embed)
+            return f"✅ Event **{name}** created (ID: `{eid}`) — open for registration. Posted to war-results."
+
+        # ── close event ───────────────────────────────────────────────
+        m = re.search(r'close\s+(?:the\s+)?event\s+["\']?([^"\']+)["\']?', t, re.I)
+        if m:
+            name = m.group(1).strip()
+            ev   = next((e for e in sd.get("events",[]) if name.lower() in e["name"].lower()), None)
+            if ev:
+                ev["status"] = "completed"
+                save()
+                return f"✅ Event **{ev['name']}** closed."
+            return f"❌ Event not found: **{name}**. Events: {', '.join(e['name'] for e in sd.get('events',[]))}"
+
+        # ── start event ───────────────────────────────────────────────
+        m = re.search(r'start\s+(?:the\s+)?event\s+["\']?([^"\']+)["\']?', t, re.I)
+        if m:
+            name = m.group(1).strip()
+            ev   = next((e for e in sd.get("events",[]) if name.lower() in e["name"].lower()), None)
+            if ev:
+                ev["status"] = "live"
+                save()
+                embed = discord.Embed(
+                    title=f"⚔️ EVENT NOW LIVE — {ev['name']}",
+                    description="The arena is open! May the best warrior win.",
+                    color=0xdc143c, timestamp=datetime.utcnow()
+                )
+                await to_channel("war-results", embed)
+                return f"✅ Event **{ev['name']}** is now LIVE — posted to war-results."
+            return f"❌ Event not found: **{name}**"
+
+        # ── schedule match ────────────────────────────────────────────
+        m = re.search(r'schedule\s+([a-z0-9 ]+?)\s+vs\.?\s+([a-z0-9 ]+?)\s+(?:on\s+|for\s+|at\s+)?(.+)', t, re.I)
+        if m:
+            t1 = m.group(1).strip(); t2 = m.group(2).strip(); dt = m.group(3).strip()
+            t1m = fuzzy(t1, sq); t2m = fuzzy(t2, sq)
+            names = f"**{t1m or t1}** vs **{t2m or t2}**"
+            embed = discord.Embed(
+                title="📅 MATCH SCHEDULED",
+                description=f"⚔️ {names}\n📅 **{dt}**\n\n*Prepare your lineups, warriors!*",
+                color=0xffd700, timestamp=datetime.utcnow()
+            )
+            await to_channel("war-results", embed)
+            return f"✅ Match scheduled: {names} — **{dt}** — posted to war-results."
+
+        # ── post announcement ─────────────────────────────────────────
+        m = re.search(r'(?:post|send|announce)\s+(?:announcement|announce|message)\s*:?\s*(?:title\s*:?\s*["\']?([^"\']+?)["\']?\s+)?(?:message\s*:?\s*)?["\']?(.+)["\']?$', t, re.I)
+        if m:
+            title = (m.group(1) or "Royal Announcement").strip()
+            msg   = m.group(2).strip()
+            ann_ch = discord.utils.get(guild.text_channels, name="announcements")
+            if not ann_ch:
+                ann_ch = next((c for c in guild.text_channels if "announcement" in c.name.lower()), None)
+            if ann_ch:
                 role    = discord.utils.get(guild.roles, name="MAJESTIC")
-                mention = role.mention if role else "@MAJESTIC"
+                mention = role.mention if role else ""
                 embed   = discord.Embed(
-                    title=args["title"], description=args["message"],
+                    title=title, description=msg,
                     color=0xffd700, timestamp=datetime.utcnow()
                 )
-                embed.set_footer(text="⚜️ Majestic Dominion | Royal Decree")
-                await ann_ch.send(content=f"📢 {mention}", embed=embed)
-                return f"✅ Announcement posted: '{args['title']}'"
+                embed.set_footer(text="⚜️ Majestic Dominion")
+                await ann_ch.send(content=f"📢 {mention}" if mention else None, embed=embed)
+                return f"✅ Announcement posted to {ann_ch.mention}: **{title}**"
+            return "❌ Announcements channel not found."
 
-            elif name == "schedule_match":
-                if not is_mod():
-                    return "❌ Permission denied."
-                t1  = args["team1"]
-                t2  = args["team2"]
-                dt  = args["date_time"]
-                war = discord.utils.get(guild.text_channels, name="『🏆』war-results")
-                if war:
-                    embed = discord.Embed(
-                        title="📅 MATCH SCHEDULED!",
-                        description=(
-                            f"⚔️ **{t1}** vs **{t2}**\n\n"
-                            f"📅 **{dt}**\n\n"
-                            f"*Prepare your lineups, warriors. The battle approaches!*"
-                        ),
-                        color=0xffd700, timestamp=datetime.utcnow()
-                    )
-                    embed.set_footer(text="⚜️ Majestic Dominion")
-                    await war.send(embed=embed)
-                return f"✅ Match scheduled: {t1} vs {t2} on {dt}"
-
-            elif name == "add_registrant":
-                if not is_mod():
-                    return "❌ Permission denied."
-                ename = args["event_name"].lower()
-                pname = args["participant_name"]
-                ev    = next((e for e in sd.get("events",[]) if ename in e["name"].lower()), None)
-                if not ev:
-                    return f"❌ Event not found: {args['event_name']}"
+        # ── add registrant ────────────────────────────────────────────
+        m = re.search(r'add\s+([a-z0-9 ]+?)\s+to\s+(?:the\s+)?(?:event\s+)?["\']?([^"\']+)["\']?', t, re.I)
+        if m:
+            pname  = m.group(1).strip()
+            evname = m.group(2).strip()
+            ev = next((e for e in sd.get("events",[]) if evname.lower() in e["name"].lower()), None)
+            if ev:
                 ev.setdefault("registrations",[]).append({
                     "player_name": pname, "player_id": None,
                     "registered_at": datetime.utcnow().isoformat(),
                     "added_by_mod": True
                 })
-                self._save()
-                return f"✅ {pname} added to {ev['name']}. Total: {len(ev['registrations'])}"
+                save()
+                return f"✅ **{pname}** added to **{ev['name']}** — {len(ev['registrations'])} total registrants."
+            return f"❌ Event not found: **{evname}**"
 
+        # ── remove registrant ─────────────────────────────────────────
+        m = re.search(r'remove\s+([a-z0-9 ]+?)\s+from\s+(?:the\s+)?(?:event\s+)?["\']?([^"\']+)["\']?', t, re.I)
+        if m:
+            pname  = m.group(1).strip()
+            evname = m.group(2).strip()
+            ev = next((e for e in sd.get("events",[]) if evname.lower() in e["name"].lower()), None)
+            if ev:
+                before = len(ev.get("registrations",[]))
+                ev["registrations"] = [
+                    r for r in ev.get("registrations",[])
+                    if pname.lower() not in (r.get("player_name","") or r.get("team_name","")).lower()
+                ]
+                removed = before - len(ev["registrations"])
+                save()
+                return f"✅ Removed **{pname}** from **{ev['name']}** ({removed} entry removed)." if removed else f"❌ **{pname}** not found in **{ev['name']}**."
+
+        # ── set points manually ───────────────────────────────────────
+        m = re.search(r'set\s+([a-z0-9 ]+?)\s+(?:points?|pts?)\s+to\s+(\d+)', t, re.I)
+        if m:
+            name = m.group(1).strip(); pts = int(m.group(2))
+            km   = fuzzy(name, sq)
+            if km:
+                sq[km]["points"] = pts; save()
+                return f"✅ **{km}** points set to **{pts}**."
+            return f"❌ Kingdom not found: **{name}**"
+
+        # ── clear all bounties ────────────────────────────────────────
+        if re.search(r'clear\s+all\s+bounties', t, re.I):
+            sd["bounties"] = {}; save()
+            return "✅ All bounties cleared."
+
+        # ── send message to channel ───────────────────────────────────
+        m = re.search(r'send\s+(?:to\s+#?([a-z0-9-]+)\s+)?["\'](.+?)["\']', t, re.I)
+        if m:
+            chname = m.group(1); msg = m.group(2)
+            target = discord.utils.get(guild.text_channels, name=chname) if chname else None
+            if not target:
+                target = discord.utils.get(guild.text_channels, name="war-results")
+            if target:
+                await target.send(msg)
+                return f"✅ Message sent to {target.mention}."
+
+
+        # ── give role ─────────────────────────────────────────────────
+        m = re.search(r"give\s+role\s+([a-z0-9 _-]+?)\s+to\s+(\S+)", t, re.I)
+        if not m:
+            m = re.search(r"add\s+role\s+([a-z0-9 _-]+?)\s+to\s+(\S+)", t, re.I)
+        if m and "squad" not in t and "event" not in t:
+            role_name = m.group(1).strip()
+            user_ref  = m.group(2).strip().strip("<@!>")
+            role = discord.utils.get(guild.roles, name=role_name)
+            if not role:
+                role = next((r for r in guild.roles if role_name.lower() in r.name.lower()), None)
+            member_t = None
+            if user_ref.isdigit():
+                member_t = guild.get_member(int(user_ref))
             else:
-                return f"Unknown tool: {name}"
+                member_t = discord.utils.get(guild.members, name=user_ref) or                            next((m for m in guild.members if user_ref.lower() in m.display_name.lower()), None)
+            if role and member_t:
+                try:
+                    await member_t.add_roles(role)
+                    return f"✅ Role **{role.name}** given to **{member_t.display_name}**."
+                except discord.Forbidden:
+                    return f"❌ Bot lacks permission to give **{role.name}** (check bot role hierarchy)."
+            return f"❌ Could not find role **{role_name}** or user **{user_ref}**."
 
-        except Exception as e:
-            return f"Tool error ({name}): {str(e)}\n{traceback.format_exc()[:300]}"
-
-    def _save(self):
-        """Attempt to call the main bot's save_data function."""
-        try:
-            import sys
-            main = sys.modules.get("__main__")
-            if main and hasattr(main, "save_data"):
-                main.save_data(self.squad_data)
-        except Exception as e:
-            print(f"⚠️ Oracle save error: {e}")
-
-    # ── Gemini call with tool loop ────────────────────────────────────
-
-    async def _call_gemini(self, messages: list, guild, invoker) -> str:
-        if not self.gemini_model:
-            raise RuntimeError("Gemini not configured")
-
-        # Build Gemini chat history
-        gemini_history = []
-        for m in messages[:-1]:   # all except last message
-            role    = "user" if m["role"] == "user" else "model"
-            content = m["content"] if isinstance(m["content"], str) else str(m["content"])
-            gemini_history.append({"role": role, "parts": [content]})
-
-        last_message = messages[-1]["content"]
-
-        # Inject live context into the first user message
-        context = self.build_context()
-        full_message = f"[LIVE SERVER DATA]\n{context}\n\n[USER MESSAGE]\n{last_message}"
-
-        chat = self.gemini_model.start_chat(history=gemini_history)
-
-        # Agentic loop — Gemini may call tools multiple times
-        current_message = full_message
-        for _ in range(5):
-            response = await asyncio.get_event_loop().run_in_executor(
-                None, lambda m=current_message: chat.send_message(m)
-            )
-
-            # Check for function calls
-            fn_calls = []
-            text_parts = []
-            for part in response.parts:
-                if hasattr(part, "function_call") and part.function_call.name:
-                    fn_calls.append(part.function_call)
-                elif hasattr(part, "text") and part.text:
-                    text_parts.append(part.text)
-
-            if not fn_calls:
-                # Final text response
-                return " ".join(text_parts) if text_parts else "*(no response)*"
-
-            # Execute all tool calls and feed results back
-            tool_response_parts = []
-            for fc in fn_calls:
-                args   = dict(fc.args) if fc.args else {}
-                result = await self.execute_tool(fc.name, args, guild, invoker)
-                tool_response_parts.append(
-                    genai.protos.Part(
-                        function_response=genai.protos.FunctionResponse(
-                            name=fc.name,
-                            response={"result": result}
-                        )
-                    )
-                )
-            # Feed tool results back
-            current_message = tool_response_parts
-
-        return "*(Oracle reached thinking limit — try a simpler question)*"
-
-    # ── Groq fallback call ────────────────────────────────────────────
-
-    async def _call_groq(self, messages: list, guild, invoker) -> str:
-        if not self.groq_client:
-            raise RuntimeError("Groq not configured")
-
-        context = self.build_context()
-        system  = ORACLE_PERSONALITY + "\n\nLIVE SERVER DATA:\n" + context
-
-        groq_messages = [{"role": "system", "content": system}]
-        for m in messages:
-            role    = m["role"] if m["role"] in ("user","assistant") else "user"
-            content = m["content"] if isinstance(m["content"], str) else str(m["content"])
-            groq_messages.append({"role": role, "content": content})
-
-        groq_tools = _to_groq_tools(TOOLS_SCHEMA)
-
-        for _ in range(5):
-            response = await self.groq_client.chat.completions.create(
-                model=GROQ_MODEL,
-                messages=groq_messages,
-                tools=groq_tools,
-                max_tokens=MAX_TOKENS,
-            )
-            choice = response.choices[0]
-
-            if choice.finish_reason == "stop":
-                return choice.message.content or ""
-
-            elif choice.finish_reason == "tool_calls":
-                # Execute tools
-                groq_messages.append(choice.message.model_dump())
-                for tc in choice.message.tool_calls:
-                    args   = json.loads(tc.function.arguments or "{}")
-                    result = await self.execute_tool(tc.function.name, args, guild, invoker)
-                    groq_messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": result
-                    })
+        # ── remove role ───────────────────────────────────────────────
+        m = re.search(r"remove\s+role\s+([a-z0-9 _-]+?)\s+from\s+(\S+)", t, re.I)
+        if m and "bounty" not in t and "registrant" not in t and "event" not in t:
+            role_name = m.group(1).strip()
+            user_ref  = m.group(2).strip().strip("<@!>")
+            role = discord.utils.get(guild.roles, name=role_name)
+            if not role:
+                role = next((r for r in guild.roles if role_name.lower() in r.name.lower()), None)
+            member_t = None
+            if user_ref.isdigit():
+                member_t = guild.get_member(int(user_ref))
             else:
-                break
+                member_t = next((mb for mb in guild.members if user_ref.lower() in mb.display_name.lower()), None)
+            if role and member_t:
+                try:
+                    await member_t.remove_roles(role)
+                    return f"✅ Role **{role.name}** removed from **{member_t.display_name}**."
+                except discord.Forbidden:
+                    return f"❌ Bot lacks permission to remove **{role.name}**."
+            return f"❌ Role **{role_name}** or user **{user_ref}** not found."
 
-        return "*(Groq reached thinking limit)*"
-
-    # ── Main entry: think ─────────────────────────────────────────────
-
-    async def think(self, user_id: int, username: str, text: str,
-                    guild, channel, invoker) -> str:
-        # Build conversation history
-        history  = self.history[user_id][-CONTEXT_MESSAGES:]
-        messages = history + [{"role": "user", "content": f"{username}: {text}"}]
-
-        primary_err = None
-
-        # Try Gemini first
-        try:
-            reply = await self._call_gemini(messages, guild, invoker)
-        except Exception as e:
-            primary_err = str(e)
-            print(f"⚠️ Oracle Gemini error: {e}")
-            # Fallback to Groq
+        # ── create role ───────────────────────────────────────────────
+        m = re.search(r"create role ([a-z0-9 _-]+?)(?:\s+color (\S+))?$", t, re.I)
+        if m:
+            role_name  = m.group(1).strip()
+            color_name = m.group(2) or "default"
+            color_map  = {"red":discord.Color.red(),"blue":discord.Color.blue(),
+                          "green":discord.Color.green(),"gold":discord.Color.gold(),
+                          "purple":discord.Color.purple(),"orange":discord.Color.orange(),
+                          "default":discord.Color.default()}
+            color = color_map.get(color_name.lower(), discord.Color.default())
             try:
-                reply = await self._call_groq(messages, guild, invoker)
-                reply = f"*(Groq backup — {primary_err[:50]}...)*\n\n{reply}"
-            except Exception as e2:
-                return (
-                    "🔮 *The Oracle's sight is clouded...*\n"
-                    f"Gemini: `{primary_err}`\n"
-                    f"Groq: `{str(e2)}`\n\n"
-                    "Check your API keys in Railway Variables."
+                new_role = await guild.create_role(name=role_name, color=color)
+                return f"✅ Role **{new_role.name}** created."
+            except discord.Forbidden:
+                return "❌ Bot lacks permission to create roles."
+
+        # ── delete role ───────────────────────────────────────────────
+        m = re.search(r"delete role ([a-z0-9 _-]+)", t, re.I)
+        if m:
+            role_name = m.group(1).strip()
+            role = discord.utils.get(guild.roles, name=role_name)
+            if not role:
+                role = next((r for r in guild.roles if role_name.lower() in r.name.lower()), None)
+            if role:
+                try:
+                    await role.delete()
+                    return f"✅ Role **{role_name}** deleted."
+                except discord.Forbidden:
+                    return "❌ Bot lacks permission to delete that role."
+            return f"❌ Role **{role_name}** not found."
+
+        # ── create channel ────────────────────────────────────────────
+        m = re.search(r"create channel ([a-z0-9 _-]+?)(?:\s+in ([a-z0-9 _-]+))?$", t, re.I)
+        if m and "event" not in t:
+            ch_name  = m.group(1).strip().replace(" ","-").lower()
+            cat_name = m.group(2).strip() if m.group(2) else None
+            category = None
+            if cat_name:
+                category = discord.utils.get(guild.categories, name=cat_name)
+                if not category:
+                    category = next((c for c in guild.categories if cat_name.lower() in c.name.lower()), None)
+            try:
+                new_ch = await guild.create_text_channel(ch_name, category=category)
+                return f"✅ Channel **#{new_ch.name}** created{(' in category **'+category.name+'**') if category else ''}."
+            except discord.Forbidden:
+                return "❌ Bot lacks permission to create channels."
+
+        # ── delete channel ────────────────────────────────────────────
+        m = re.search(r"delete channel #?([a-z0-9 _-]+)", t, re.I)
+        if m:
+            ch_name = m.group(1).strip().replace(" ","-").lower()
+            ch = discord.utils.get(guild.text_channels, name=ch_name)
+            if not ch:
+                ch = next((c for c in guild.text_channels if ch_name in c.name.lower()), None)
+            if ch:
+                try:
+                    await ch.delete()
+                    return f"✅ Channel **#{ch_name}** deleted."
+                except discord.Forbidden:
+                    return "❌ Bot lacks permission to delete that channel."
+            return f"❌ Channel **#{ch_name}** not found."
+
+        # ── kick member ───────────────────────────────────────────────
+        m = re.search(r'kick\s+<?@?!?(\d+|[a-z0-9_.# ]+)>?(?:\s+(?:for|reason)\s*:?\s*(.+))?$', t, re.I)
+        if m:
+            user_ref = m.group(1).strip().strip("<@!>")
+            reason   = m.group(2) or "Removed by moderator via Oracle"
+            member_t = None
+            if user_ref.isdigit():
+                member_t = guild.get_member(int(user_ref))
+            else:
+                member_t = next((mb for mb in guild.members if user_ref.lower() in mb.display_name.lower()), None)
+            if member_t:
+                try:
+                    await member_t.kick(reason=reason)
+                    return f"✅ **{member_t.display_name}** has been kicked. Reason: {reason}"
+                except discord.Forbidden:
+                    return "❌ Bot lacks permission to kick that member."
+            return f"❌ Member **{user_ref}** not found."
+
+        # ── get member profile ────────────────────────────────────────
+        m = re.search(r'(?:get|show|view)\s+profile\s+(?:of\s+|for\s+)?<?@?!?(\d+|[a-z0-9_.# ]+)>?', t, re.I)
+        if m:
+            user_ref = m.group(1).strip().strip("<@!>")
+            member_t = None
+            if user_ref.isdigit():
+                member_t = guild.get_member(int(user_ref))
+            else:
+                member_t = next((mb for mb in guild.members if user_ref.lower() in mb.display_name.lower()), None)
+            if member_t:
+                sd2  = self.squad_data
+                pid  = str(member_t.id)
+                prof = sd2.get("profiles",{}).get(pid)
+                sq_name, sq_tag = "None", ""
+                for sname, sinfo in sd2.get("squads",{}).items():
+                    roster = sinfo.get("main_roster",[]) + sinfo.get("subs",[])
+                    if member_t.id in roster or pid in [str(x) for x in roster]:
+                        sq_name = sname
+                        sq_tag  = self.squads.get(sname,"")
+                        break
+                roles_str = ", ".join(r.name for r in member_t.roles if r.name != "@everyone")
+                info = (
+                    f"**{member_t.display_name}** (ID:{pid})\n"
+                    f"Kingdom: {sq_tag} {sq_name}\n"
+                    f"Roles: {roles_str or 'none'}\n"
+                    f"Joined: {member_t.joined_at.strftime('%Y-%m-%d') if member_t.joined_at else '?'}\n"
                 )
+                if prof:
+                    info += (
+                        f"IGN: {prof.get('ingame_name','?')} | "
+                        f"ID: {prof.get('ingame_id','?')} | "
+                        f"Rank: {prof.get('rank','?')}"
+                    )
+                return info
+            return f"❌ Member **{user_ref}** not found."
 
-        # Save to history
-        self.history[user_id] = (messages + [
-            {"role": "assistant", "content": reply}
-        ])[-CONTEXT_MESSAGES * 2:]
+        # ── list all members ──────────────────────────────────────────
+        m = re.search(r"(?:list|show)\s+(?:all\s+)?members(?:\s+with\s+role\s+([a-z0-9 _-]+))?", t, re.I)
+        if m:
+            role_filter = m.group(1).strip() if m.group(1) else None
+            if role_filter:
+                role = discord.utils.get(guild.roles, name=role_filter)
+                if not role:
+                    role = next((r for r in guild.roles if role_filter.lower() in r.name.lower()), None)
+                members_list = [mb.display_name for mb in (role.members if role else [])]
+                return f"**{role_filter}** members ({len(members_list)}): {', '.join(members_list[:30]) or 'none'}"
+            else:
+                names = [mb.display_name for mb in guild.members if not mb.bot]
+                return f"**Server members** ({len(names)}): {', '.join(names[:40])}{'...' if len(names)>40 else ''}"
 
-        return reply
+        # ── add to squad/kingdom ──────────────────────────────────────
+        m = re.search(r"add\s+(\S+)\s+to\s+(?:squad|kingdom)\s+([a-z0-9 ]+?)(?:\s+as\s+(sub|main))?$", t, re.I)
+        if m:
+            user_ref  = m.group(1).strip().strip("<@!>")
+            sq_name   = m.group(2).strip()
+            slot_type = (m.group(3) or "main").lower()
+            member_t  = None
+            if user_ref.isdigit():
+                member_t = guild.get_member(int(user_ref))
+            else:
+                member_t = next((mb for mb in guild.members if user_ref.lower() in mb.display_name.lower()), None)
+            sq_match = fuzzy(sq_name, sd.get("squads",{}))
+            if member_t and sq_match:
+                sq_info = sd["squads"][sq_match]
+                slot = "subs" if "sub" in slot_type else "main_roster"
+                if member_t.id not in sq_info.get(slot,[]):
+                    sq_info.setdefault(slot,[]).append(member_t.id)
+                    save()
+                return f"✅ **{member_t.display_name}** added to **{sq_match}** ({slot})."
+            return f"❌ Member **{user_ref}** or kingdom **{sq_name}** not found."
+
+        # ── oracle usage stats ────────────────────────────────────────
+        if re.search(r'(?:oracle|bot)\s+(?:usage|stats|status)', t, re.I):
+            used, total = self.usage_stats()
+            pct = round(used/total*100)
+            bar = "█" * (pct//10) + "░" * (10 - pct//10)
+            groq_ok = "✅" if self.groq else "❌"
+            gem_ok  = "✅" if self.gemini_key else "❌"
+            return (
+                f"**Oracle Status**\n"
+                f"Daily usage: `{bar}` {used}/{total} ({pct}%)\n"
+                f"Groq: {groq_ok} | Gemini: {gem_ok}\n"
+                f"Rate limit: {RATE_SEC}s between requests | {RATE_MIN}/min per user"
+            )
+
+        # ── list server roles ─────────────────────────────────────────
+        if re.search(r"(?:list|show)\s+(?:all\s+)?(?:server\s+)?roles", t, re.I):
+            roles = [r.name for r in reversed(guild.roles) if r.name != "@everyone"]
+            return f"**Server Roles** ({len(roles)}): {', '.join(roles)}"
+
+        # ── list channels ─────────────────────────────────────────────
+        if re.search(r"(?:list|show)\s+(?:all\s+)?channels", t, re.I):
+            channels = [f"#{c.name}" for c in guild.text_channels]
+            return f"**Channels** ({len(channels)}): {', '.join(channels[:30])}"
 
 
-# ── Discord wiring ────────────────────────────────────────────────────
+
+        return None  # no action detected
+
+    # ── AI call: Groq ─────────────────────────────────────────────────
+
+    async def _groq(self, prompt: str) -> str:
+        if not self.groq:
+            raise RuntimeError("No Groq client")
+        # Simple completion — no tool calls, avoids all validation errors
+        resp = await self.groq.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=MAX_TOKENS,
+            temperature=0.8,
+        )
+        return resp.choices[0].message.content or ""
+
+    # ── AI call: Gemini REST ──────────────────────────────────────────
+
+    async def _gemini(self, prompt: str) -> str:
+        if not self.gemini_key or not AIOHTTP_OK:
+            raise RuntimeError("Gemini not configured")
+        url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+               f"{GEMINI_MODEL}:generateContent?key={self.gemini_key}")
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"maxOutputTokens": MAX_TOKENS, "temperature": 0.8}
+        }
+        async with aiohttp.ClientSession() as s:
+            async with s.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=15)) as r:
+                if r.status == 429:
+                    raise RuntimeError("Gemini quota exceeded")
+                if r.status != 200:
+                    raise RuntimeError(f"Gemini HTTP {r.status}")
+                d = await r.json()
+        return d["candidates"][0]["content"]["parts"][0]["text"].strip()
+
+    # ── Build prompt ──────────────────────────────────────────────────
+
+    def _build_prompt(self, username: str, text: str, is_mod: bool,
+                      history: list, action_result: str | None) -> str:
+        personality = PERSONALITY_MOD if is_mod else PERSONALITY_MEMBER
+        ctx         = self.context()
+
+        hist = ""
+        for m in history:
+            role = "User" if m["role"] == "user" else "Oracle"
+            hist += f"{role}: {m['content']}\n"
+
+        action_note = ""
+        if action_result:
+            action_note = f"\n[ACTION EXECUTED]\n{action_result}\n\nNow confirm this to the user naturally and briefly."
+
+        return (
+            f"{personality}\n\n"
+            f"{ctx}\n\n"
+            f"{'[CONVERSATION HISTORY]' + chr(10) + hist if hist else ''}"
+            f"{'[MOD CONTEXT] You are in the mod channel. You can take actions.' if is_mod else ''}\n"
+            f"{action_note}\n"
+            f"User ({username}): {text}\n\n"
+            f"Oracle:"
+        )
+
+    # ── Main entry ────────────────────────────────────────────────────
+
+    async def think(self, uid: int, username: str, text: str,
+                    guild, channel, invoker, is_mod: bool) -> str:
+
+        history = self.history[uid][-HISTORY:]
+
+        # Mod channel: try to detect and execute an action first
+        action_result = None
+        if is_mod:
+            try:
+                action_result = await self._detect_and_execute(text, guild, invoker)
+            except Exception as e:
+                print(f"⚠️ Action error: {e}")
+                action_result = f"❌ Action failed: {str(e)[:100]}"
+
+        prompt = self._build_prompt(username, text, is_mod, history, action_result)
+
+        # Try Groq → Gemini fallback
+        reply = None
+        try:
+            reply = await self._groq(prompt)
+        except Exception as e:
+            print(f"⚠️ Groq error: {e}")
+            try:
+                reply = await self._gemini(prompt)
+            except Exception as e2:
+                print(f"⚠️ Gemini error: {e2}")
+                if action_result:
+                    # If an action was done, at least report it
+                    reply = action_result
+                else:
+                    reply = "🔮 I need a moment to recover — try again shortly."
+
+        # Clean any leaked function call text just in case
+        if reply:
+            reply = re.sub(r'<function=[^>]+>[^<]*</function>', '', reply)
+            reply = re.sub(r'<function=[^/]+/>', '', reply)
+            reply = reply.strip()
+
+        # Update history
+        self.history[uid] = (history + [
+            {"role": "user",      "content": text},
+            {"role": "assistant", "content": reply or ""}
+        ])[-HISTORY * 2:]
+
+        return reply or "🔮 The Oracle is momentarily lost in thought..."
+
+
+# ═════════════════════════════════════════════════════════════════════
+#  Discord wiring
+# ═════════════════════════════════════════════════════════════════════
 
 def setup_oracle(bot, oracle: OracleAgent):
 
+    def _is_mod_channel(channel):
+        return MOD_ORACLE_CHANNEL in channel.name.lower()
+
+    def _is_oracle_channel(channel):
+        return (ROYAL_ORACLE_CHANNEL in channel.name.lower() or
+                MOD_ORACLE_CHANNEL in channel.name.lower())
+
+    def _user_is_mod(member):
+        if not member: return False
+        return any(r.name == "KNIGHTS" for r in member.roles)
+
     @bot.listen("on_message")
     async def oracle_listener(message):
-        if message.author.bot:
-            return
+        if message.author.bot: return
 
-        in_oracle_ch = message.channel.name in (ORACLE_CHANNEL_NAME, MOD_ORACLE_CHANNEL)
-        is_mention   = bot.user in message.mentions
+        in_oracle  = _is_oracle_channel(message.channel)
+        is_mention = bot.user in message.mentions
 
-        if not (in_oracle_ch or is_mention):
-            return
+        if not (in_oracle or is_mention): return
 
-        limited, msg = oracle.is_rate_limited(message.author.id)
+        limited, lmsg = oracle.is_limited(message.author.id)
         if limited:
-            await message.reply(msg, mention_author=False)
+            await message.reply(lmsg, mention_author=False)
             return
 
         text = (message.content
-                .replace(f"<@{bot.user.id}>", "")
-                .replace(f"<@!{bot.user.id}>", "")
+                .replace(f"<@{bot.user.id}>","")
+                .replace(f"<@!{bot.user.id}>","")
                 .strip())
         if not text:
+            await message.reply("🔮 Yes? Ask away.", mention_author=False)
+            return
+
+        # Determine access level
+        # mod-oracle channel AND user has mod role → full access
+        # everything else → read-only member access
+        member = message.guild.get_member(message.author.id) if message.guild else None
+        is_mod = _is_mod_channel(message.channel) and _user_is_mod(member)
+
+        # If non-mod tries to use mod-oracle, redirect them
+        if _is_mod_channel(message.channel) and not _user_is_mod(member):
             await message.reply(
-                "🔮 *The Oracle stirs... speak your question, warrior.*",
+                "🛡️ This channel is for the Royal Council only, warrior. "
+                "Head to the Royal Oracle channel for assistance.",
                 mention_author=False
             )
             return
 
         async with message.channel.typing():
             reply = await oracle.think(
-                user_id  = message.author.id,
-                username = message.author.display_name,
-                text     = text,
-                guild    = message.guild,
-                channel  = message.channel,
-                invoker  = message.author,
+                uid=message.author.id, username=message.author.display_name,
+                text=text, guild=message.guild, channel=message.channel,
+                invoker=message.author, is_mod=is_mod
             )
 
-        # Send reply (split if over 2000 chars)
-        chunks = [reply[i:i+1990] for i in range(0, len(reply), 1990)]
-        for i, chunk in enumerate(chunks):
-            if i == 0:
-                await message.reply(chunk, mention_author=False)
-            else:
-                await message.channel.send(chunk)
+        # Send (split if >2000 chars)
+        for i, chunk in enumerate([reply[j:j+1990] for j in range(0,len(reply),1990)]):
+            if i == 0: await message.reply(chunk, mention_author=False)
+            else: await message.channel.send(chunk)
 
-    @bot.tree.command(name="oracle", description="🔮 Consult the Royal Oracle — ask anything")
-    @app_commands.describe(question="Your question or command")
+    @bot.tree.command(name="oracle", description="🔮 Consult the Royal Oracle")
+    @app_commands.describe(question="Your question")
     async def oracle_cmd(interaction: discord.Interaction, question: str):
-        limited, msg = oracle.is_rate_limited(interaction.user.id)
+        limited, lmsg = oracle.is_limited(interaction.user.id)
         if limited:
-            return await interaction.response.send_message(msg, ephemeral=True)
-
+            return await interaction.response.send_message(lmsg, ephemeral=True)
         await interaction.response.defer(thinking=True)
-
+        # /oracle is always member-level (read-only) regardless of who uses it
         reply = await oracle.think(
-            user_id  = interaction.user.id,
-            username = interaction.user.display_name,
-            text     = question,
-            guild    = interaction.guild,
-            channel  = interaction.channel,
-            invoker  = interaction.user,
+            uid=interaction.user.id, username=interaction.user.display_name,
+            text=question, guild=interaction.guild, channel=interaction.channel,
+            invoker=interaction.user, is_mod=False
         )
-
-        chunks = [reply[i:i+1990] for i in range(0, len(reply), 1990)]
-        for i, chunk in enumerate(chunks):
+        for i, chunk in enumerate([reply[j:j+1990] for j in range(0,len(reply),1990)]):
             await interaction.followup.send(chunk)
 
-    @bot.tree.command(name="oracle_clear", description="🔮 Clear your Oracle conversation history")
+    @bot.tree.command(name="oracle_clear", description="🔮 Clear your Oracle history")
     async def oracle_clear(interaction: discord.Interaction):
         oracle.history.pop(interaction.user.id, None)
-        await interaction.response.send_message(
-            "🔮 *The Oracle's memory of your session has been wiped clean. Start fresh!*",
-            ephemeral=True
-        )
+        await interaction.response.send_message("🔮 Memory cleared!", ephemeral=True)
 
-    print("✅ Oracle: Discord handlers ready")
+    print("✅ Oracle v2: handlers ready")
+    print(f"   Mod channel: any channel containing '{MOD_ORACLE_CHANNEL}'")
+    print(f"   Public channel: any channel containing '{ROYAL_ORACLE_CHANNEL}'")
