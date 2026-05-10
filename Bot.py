@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Optional
 import uuid
 import random
+from oracle_agent import OracleAgent, setup_oracle
 
 # -------------------- INTENTS --------------------
 intents = discord.Intents.default()
@@ -115,7 +116,7 @@ LOG_CHANNEL_NAME = "『🕹️』bot-logs"
 ANNOUNCE_CHANNEL_NAME = "『🏆』war-results"
 NEWS_CHANNEL_NAME = "『📢』𝐀𝐧𝐧𝐨𝐮𝐧𝐜𝐞𝐦𝐞𝐧𝐭𝐬"
 TOURNAMENT_CHANNEL_NAME = "『🗞️』𝐓𝐨𝐮𝐫𝐧𝐚𝐦𝐞𝐧𝐭-𝐍𝐞𝐰𝐬"
-BOT_COMMANDS_CHANNEL_NAME = "『👑』Majestic 𝐁𝐨𝐭-𝐂𝐨𝐦𝐦𝐚𝐧𝐝𝐬"
+BOT_COMMANDS_CHANNEL_NAME = "『👑』majestic-𝐁𝐨𝐭-𝐂𝐨𝐦𝐦𝐚𝐧𝐝𝐬"
 MAJESTIC_ROLE_NAME = "MAJESTIC"
 BOT_GUIDE_POSTED_KEY = "bot_guide_message_id"
 
@@ -370,7 +371,7 @@ if "challenges" not in squad_data:
     squad_data["challenges"] = []
 if "bounties" not in squad_data:
     squad_data["bounties"] = {}
-
+oracle = OracleAgent(bot, squad_data, SQUADS)
 
 # -------------------- LOGGING --------------------
 # Cached URL for transparent logo (uploaded once on startup)
@@ -2049,14 +2050,21 @@ async def daily_pulse_task():
 
         # Active events
         all_ev = squad_data.get("events", [])
-        open_ev = [e for e in all_ev if e["status"] in ("open", "ongoing")]
+        open_ev = [e for e in all_ev if e["status"] in ("open", "ongoing", "live")]
         if open_ev:
             ev_text = ""
             for ev in open_ev[:3]:
                 si = "🟢" if ev["status"] == "open" else "⚔️"
                 rc = len(ev.get("registrations", []))
                 mx = f"/{ev['max_entries']}" if ev.get("max_entries") else ""
-                ev_text += f"{si} **{ev['name']}** — {ev.get('format','?')} | 👥 {rc}{mx}\n"
+                if ev.get("type") == "fun":
+                    sd_ev = ev.get("social_data", {})
+                    done  = len([r for r in sd_ev.get("rounds",[]) if r.get("status")=="completed"])
+                    lb_cnt = len(sd_ev.get("leaderboard",{}))
+                    extra = f" | 🎉 {done} rounds | 👑 {lb_cnt} competitors"
+                else:
+                    extra = ""
+                ev_text += f"{si} **{ev['name']}** — {ev.get('format','?')} | 👥 {rc}{mx}{extra}\n"
             embed.add_field(name="🎪 Active Events", value=ev_text.strip(), inline=False)
 
         # Oracle prediction for today — who will fight next?
@@ -4970,7 +4978,7 @@ class ModeratorPanelView(View):
     @discord.ui.button(label="Events", style=discord.ButtonStyle.primary, emoji="🎪", row=4)
     async def events_btn(self, interaction: discord.Interaction, button: Button):
         embed = build_event_manager_embed()
-        await interaction.response.send_message(embed=embed, view=EventManagerView(), ephemeral=True)
+        await interaction.response.send_message(embed=embed, view=EventManagerViewV2(), ephemeral=True)
         await log_action(interaction.guild, "🎪 Events", f"{interaction.user.mention} opened **Event Manager**")
 
 
@@ -5595,8 +5603,2639 @@ async def restore_command(interaction: discord.Interaction, backup: discord.Atta
 
 
 # =====================================================================
-#                         EVENTS SYSTEM
+#                    TOURNAMENT ENGINE v2
 # =====================================================================
+
+# =====================================================================
+#                    TOURNAMENT ENGINE v2 — INTELLIGENT ESPORTS CORE
+# =====================================================================
+#
+# Architecture:
+#   TournamentEngine   — bracket logic, auto-progression, result recording
+#   EventMatchViews    — mod tools: record results, manage registrants,
+#                        force-advance, reschedule, live dashboard
+#   ProfessionalAnnouncements — cinematic embeds for every event moment
+#   Lifecycle states   — registration → check-in → seeding → live → ended
+# =====================================================================
+
+# ── Event & Match constants ───────────────────────────────────────────
+
+EVENT_STATUS_LABELS = {
+    "open":         ("🟢", "Registration Open"),
+    "checkin":      ("⏰", "Check-In Phase"),
+    "seeding":      ("🎲", "Seeding Phase"),
+    "live":         ("⚔️", "Tournament Live"),
+    "completed":    ("🏆", "Concluded"),
+    "cancelled":    ("❌", "Cancelled"),
+}
+
+MATCH_STATUS_LABELS = {
+    "pending":   ("⏳", "Pending"),
+    "scheduled": ("📅", "Scheduled"),
+    "live":      ("⚔️", "Live"),
+    "completed": ("✅", "Completed"),
+    "cancelled": ("❌", "Cancelled"),
+    "bye":       ("🚪", "BYE"),
+}
+
+ROUND_NAMES_SE = [
+    "Grand Final", "Semi-Finals", "Quarter-Finals",
+    "Round of 16", "Round of 32", "Round of 64", "Round of 128"
+]
+
+BO_OPTIONS = {"bo1": "Best of 1", "bo3": "Best of 3", "bo5": "Best of 5"}
+
+
+# ── TournamentEngine ─────────────────────────────────────────────────
+
+class TournamentEngine:
+    """
+    Static methods that drive ALL bracket logic.
+    Every method operates on the event dict in-place.
+    """
+
+    # ── Match lookup ─────────────────────────────────────────────────
+
+    @staticmethod
+    def all_matches(event) -> list:
+        """Flat list of every match in bracket_data."""
+        bd = event.get("bracket_data")
+        if not bd:
+            return []
+        system = bd.get("system", "")
+        out = []
+
+        if system == "single_elim":
+            for ri, rnd in enumerate(bd.get("rounds", [])):
+                for m in rnd:
+                    m2 = dict(m)
+                    m2.setdefault("round_idx", ri)
+                    m2.setdefault("status", "pending")
+                    out.append(m2)
+
+        elif system == "double_elim":
+            for ri, rnd in enumerate(bd.get("winners", [])):
+                for m in rnd:
+                    m2 = dict(m); m2["round_idx"] = ri; m2["bracket"] = "wb"
+                    m2.setdefault("status", "pending"); out.append(m2)
+            for ri, rnd in enumerate(bd.get("losers", [])):
+                for m in rnd:
+                    m2 = dict(m); m2["round_idx"] = ri; m2["bracket"] = "lb"
+                    m2.setdefault("status", "pending"); out.append(m2)
+            gf = bd.get("grand_final")
+            if gf:
+                m2 = dict(gf); m2["bracket"] = "gf"
+                m2.setdefault("status", "pending"); out.append(m2)
+
+        elif system in ("round_robin", "groups", "group_bracket"):
+            for m in bd.get("matches", []):
+                m2 = dict(m); m2.setdefault("status", "pending"); out.append(m2)
+            bracket = bd.get("bracket")
+            if bracket:
+                for ri, rnd in enumerate(bracket.get("rounds", [])):
+                    for m in rnd:
+                        m2 = dict(m); m2["round_idx"] = ri
+                        m2.setdefault("status", "pending"); out.append(m2)
+
+        elif system in ("random_draw", "random_teams"):
+            for i, m in enumerate(bd.get("matches", [])):
+                m2 = dict(m); m2.setdefault("status", "pending"); out.append(m2)
+
+        return out
+
+    @staticmethod
+    def find_match(event, match_id) -> dict | None:
+        """Find match by ID and return a REFERENCE (not copy) to the dict inside bracket_data."""
+        bd = event.get("bracket_data")
+        if not bd:
+            return None
+        system = bd.get("system", "")
+
+        def _search(lst):
+            for m in lst:
+                if m.get("match_id") == match_id:
+                    return m
+            return None
+
+        if system == "single_elim":
+            for rnd in bd.get("rounds", []):
+                m = _search(rnd)
+                if m: return m
+
+        elif system == "double_elim":
+            for rnd in bd.get("winners", []):
+                m = _search(rnd); 
+                if m: return m
+            for rnd in bd.get("losers", []):
+                m = _search(rnd)
+                if m: return m
+            gf = bd.get("grand_final")
+            if gf and gf.get("match_id") == match_id:
+                return gf
+
+        elif system in ("round_robin", "groups", "group_bracket"):
+            m = _search(bd.get("matches", []))
+            if m: return m
+            bracket = bd.get("bracket")
+            if bracket:
+                for rnd in bracket.get("rounds", []):
+                    m = _search(rnd)
+                    if m: return m
+
+        elif system in ("random_draw", "random_teams"):
+            m = _search(bd.get("matches", []))
+            if m: return m
+
+        return None
+
+    @staticmethod
+    def pending_matches(event) -> list:
+        """Matches that haven't been completed yet (excluding BYEs)."""
+        return [m for m in TournamentEngine.all_matches(event)
+                if m.get("status") not in ("completed", "cancelled", "bye")
+                and m.get("team2") not in ("BYE", "TBD")
+                and m.get("team1") not in ("BYE", "TBD")]
+
+    @staticmethod
+    def current_round_matches(event) -> list:
+        """Matches belonging to the current active round."""
+        bd = event.get("bracket_data")
+        if not bd:
+            return []
+        system = bd.get("system", "")
+        cur = bd.get("current_round", 0)
+
+        if system == "single_elim":
+            rounds = bd.get("rounds", [])
+            if cur < len(rounds):
+                return [m for m in rounds[cur]
+                        if m.get("team2") != "BYE" and m.get("team1") != "BYE"]
+        elif system in ("round_robin", "groups", "group_bracket", "random_draw", "random_teams"):
+            return TournamentEngine.pending_matches(event)
+        elif system == "double_elim":
+            # For double elim, return all unfinished matches across both brackets
+            return TournamentEngine.pending_matches(event)
+
+        return []
+
+    # ── Result recording + auto-progression ──────────────────────────
+
+    @staticmethod
+    def record_result(event, match_id, winner, score, recorded_by=None):
+        """
+        Record a match result in the bracket. Auto-advances bracket.
+        Returns dict:
+          match         — the updated match
+          round_complete — bool, was the current round completed?
+          tournament_complete — bool, is the whole event done?
+          champion       — str | None
+          next_matches   — list of new matches generated (if any)
+          stage_name     — str, stage that just completed
+        """
+        bd = event.get("bracket_data")
+        if not bd:
+            return {"error": "No bracket data"}
+
+        system = bd.get("system", "")
+        match = TournamentEngine.find_match(event, match_id)
+        if not match:
+            return {"error": f"Match {match_id} not found"}
+
+        loser = match["team2"] if winner == match["team1"] else match["team1"]
+
+        # Update match in-place
+        match["winner"]      = winner
+        match["loser"]       = loser
+        match["score"]       = score
+        match["status"]      = "completed"
+        match["recorded_at"] = datetime.utcnow().isoformat()
+        if recorded_by:
+            match["recorded_by"] = str(recorded_by)
+
+        # Store in event match_results log
+        if "match_results" not in event:
+            event["match_results"] = []
+        event["match_results"].append({
+            "match_id":   match_id,
+            "team1":      match["team1"],
+            "team2":      match["team2"],
+            "winner":     winner,
+            "loser":      loser,
+            "score":      score,
+            "stage":      TournamentEngine.current_stage_name(event),
+            "recorded_at": match["recorded_at"],
+        })
+
+        # Advance bracket based on system
+        next_matches = []
+        if system == "single_elim":
+            next_matches = TournamentEngine._advance_se(bd, match_id, winner)
+        elif system == "double_elim":
+            next_matches = TournamentEngine._advance_de(bd, match_id, winner, loser)
+        elif system in ("round_robin", "groups", "group_bracket"):
+            # For RR, no advancement — just check if all done
+            pass
+        elif system in ("random_draw", "random_teams"):
+            # For random, collect winners for next round
+            next_matches = TournamentEngine._advance_random(event, bd, match_id, winner)
+
+        round_complete    = TournamentEngine.is_round_complete(event)
+        tournament_complete = TournamentEngine.is_complete(event)
+        champion = TournamentEngine.champion(event) if tournament_complete else None
+
+        if tournament_complete and champion:
+            event["status"]   = "completed"
+            event["champion"] = champion
+
+        return {
+            "match":              match,
+            "winner":             winner,
+            "loser":              loser,
+            "round_complete":     round_complete,
+            "tournament_complete": tournament_complete,
+            "champion":           champion,
+            "next_matches":       next_matches,
+            "stage_name":         TournamentEngine.current_stage_name(event),
+        }
+
+    @staticmethod
+    def _advance_se(bd, match_id, winner):
+        """Single elim: push winner into next round's correct slot."""
+        rounds = bd.get("rounds", [])
+        next_matches = []
+
+        for ri, rnd in enumerate(rounds):
+            for mi, m in enumerate(rnd):
+                if m.get("match_id") == match_id:
+                    # Figure out which slot in the NEXT round
+                    next_round_idx = ri + 1
+                    next_slot_idx  = mi // 2
+                    if next_round_idx < len(rounds):
+                        nm = rounds[next_round_idx][next_slot_idx]
+                        if mi % 2 == 0:
+                            nm["team1"] = winner
+                        else:
+                            nm["team2"] = winner
+                        nm.setdefault("status", "pending")
+                        # Auto-complete BYE slots
+                        if nm.get("team1") and nm.get("team2"):
+                            if nm["team1"] == "BYE":
+                                nm["winner"] = nm["team2"]
+                                nm["status"] = "bye"
+                            elif nm["team2"] == "BYE":
+                                nm["winner"] = nm["team1"]
+                                nm["status"] = "bye"
+                                # Recurse for auto-BYE advancement
+                                TournamentEngine._advance_se(bd, nm["match_id"], nm["winner"])
+                        if nm.get("status") == "pending" and nm.get("team1") and nm.get("team2") and "TBD" not in [nm["team1"], nm["team2"]]:
+                            next_matches.append(nm)
+                    # Check if we've completed the current round
+                    all_done = all(m2.get("status") in ("completed", "bye") for m2 in rnd)
+                    if all_done and next_round_idx < len(rounds):
+                        bd["current_round"] = next_round_idx
+                    return next_matches
+
+        return next_matches
+
+    @staticmethod
+    def _advance_de(bd, match_id, winner, loser):
+        """Double elim: winners advance in WB, losers drop to LB."""
+        # Find match
+        match = None
+        match_bracket = None
+        match_ri = None
+        match_mi = None
+
+        for ri, rnd in enumerate(bd.get("winners", [])):
+            for mi, m in enumerate(rnd):
+                if m.get("match_id") == match_id:
+                    match, match_bracket, match_ri, match_mi = m, "wb", ri, mi
+        if not match:
+            for ri, rnd in enumerate(bd.get("losers", [])):
+                for mi, m in enumerate(rnd):
+                    if m.get("match_id") == match_id:
+                        match, match_bracket, match_ri, match_mi = m, "lb", ri, mi
+        if not match and bd.get("grand_final", {}).get("match_id") == match_id:
+            match, match_bracket = bd["grand_final"], "gf"
+
+        if not match:
+            return []
+
+        next_matches = []
+
+        if match_bracket == "wb":
+            wb = bd.get("winners", [])
+            lb = bd.get("losers", [])
+            next_ri = match_ri + 1
+            next_mi = match_mi // 2
+            # Advance winner in WB
+            if next_ri < len(wb):
+                nm = wb[next_ri][next_mi]
+                nm["team1" if match_mi % 2 == 0 else "team2"] = winner
+                nm.setdefault("status", "pending")
+                if nm.get("team1") and nm.get("team2") and "TBD" not in [nm["team1"], nm["team2"]]:
+                    next_matches.append(nm)
+            elif bd.get("grand_final"):
+                gf = bd["grand_final"]
+                gf["team1"] = winner
+                gf.setdefault("status", "pending")
+            # Drop loser into LB
+            lb_target_ri = match_ri * 2
+            if lb_target_ri < len(lb):
+                for lm in lb[lb_target_ri]:
+                    if lm.get("team1") == "TBD":
+                        lm["team1"] = loser; break
+                    elif lm.get("team2") == "TBD":
+                        lm["team2"] = loser; break
+
+        elif match_bracket == "lb":
+            lb = bd.get("losers", [])
+            next_ri = match_ri + 1
+            next_mi = match_mi // 2
+            if next_ri < len(lb):
+                nm = lb[next_ri][next_mi]
+                nm["team1" if match_mi % 2 == 0 else "team2"] = winner
+                nm.setdefault("status", "pending")
+                if nm.get("team1") and nm.get("team2") and "TBD" not in [nm["team1"], nm["team2"]]:
+                    next_matches.append(nm)
+            elif bd.get("grand_final"):
+                gf = bd["grand_final"]
+                gf["team2"] = winner
+                gf.setdefault("status", "pending")
+                if gf.get("team1") and gf["team1"] != "TBD":
+                    next_matches.append(gf)
+
+        elif match_bracket == "gf":
+            # Tournament over
+            bd["champion"] = winner
+
+        return next_matches
+
+    @staticmethod
+    def _advance_random(event, bd, match_id, winner):
+        """For random draw/teams: collect winners, generate next round when complete."""
+        matches = bd.get("matches", [])
+        completed = [m for m in matches if m.get("status") == "completed"]
+        pending   = [m for m in matches if m.get("status") not in ("completed", "bye", "cancelled")]
+
+        if pending:
+            return []
+
+        # All matches done — generate next round from winners
+        winners = []
+        for m in matches:
+            w = m.get("winner")
+            if w and w != "BYE":
+                winners.append(w)
+
+        if len(winners) < 2:
+            bd["completed"] = True
+            if winners:
+                bd["champion"] = winners[0]
+            return []
+
+        # Generate next round
+        random.shuffle(winners)
+        round_num = bd.get("round_num", 1) + 1
+        bd["round_num"] = round_num
+        new_matches = []
+        mid_start = bd.get("mid_counter", len(matches) + 1)
+        for i in range(0, len(winners) - 1, 2):
+            new_matches.append({
+                "match_id": f"rd_{mid_start + i // 2}",
+                "team1": winners[i], "team2": winners[i+1],
+                "status": "pending", "round_label": f"Round {round_num}"
+            })
+        if len(winners) % 2 != 0:
+            new_matches.append({
+                "match_id": f"rd_{mid_start + len(winners)//2}",
+                "team1": winners[-1], "team2": "BYE",
+                "status": "bye", "winner": winners[-1]
+            })
+        bd["mid_counter"] = mid_start + len(new_matches)
+        bd["matches"].extend(new_matches)
+        return [m for m in new_matches if m.get("status") == "pending"]
+
+    # ── Round / completion checks ─────────────────────────────────────
+
+    @staticmethod
+    def is_round_complete(event) -> bool:
+        current = TournamentEngine.current_round_matches(event)
+        return len(current) > 0 and all(m.get("status") in ("completed", "bye") for m in current)
+
+    @staticmethod
+    def is_complete(event) -> bool:
+        bd = event.get("bracket_data")
+        if not bd:
+            return False
+        system = bd.get("system", "")
+        if system == "single_elim":
+            rounds = bd.get("rounds", [])
+            if rounds:
+                last = rounds[-1]
+                return all(m.get("status") in ("completed", "bye") for m in last)
+        elif system == "double_elim":
+            gf = bd.get("grand_final", {})
+            return gf.get("status") == "completed"
+        elif system in ("round_robin", "groups"):
+            return all(m.get("status") in ("completed", "bye")
+                       for m in bd.get("matches", []))
+        elif system in ("random_draw", "random_teams"):
+            return bd.get("completed", False)
+        return False
+
+    @staticmethod
+    def champion(event) -> str | None:
+        bd = event.get("bracket_data")
+        if not bd:
+            return None
+        # Check stored champion first
+        if bd.get("champion"):
+            return bd["champion"]
+        system = bd.get("system", "")
+        if system == "single_elim":
+            rounds = bd.get("rounds", [])
+            if rounds:
+                final = rounds[-1]
+                if final and final[0].get("winner"):
+                    return final[0]["winner"]
+        elif system == "double_elim":
+            gf = bd.get("grand_final", {})
+            return gf.get("winner")
+        return None
+
+    @staticmethod
+    def current_stage_name(event) -> str:
+        bd = event.get("bracket_data")
+        if not bd:
+            return "Unknown Stage"
+        system = bd.get("system", "")
+        if system == "single_elim":
+            rounds  = bd.get("rounds", [])
+            cur_idx = bd.get("current_round", 0)
+            total   = len(rounds)
+            rn_idx  = total - 1 - cur_idx
+            if 0 <= rn_idx < len(ROUND_NAMES_SE):
+                return ROUND_NAMES_SE[rn_idx]
+            return f"Round {cur_idx + 1}"
+        elif system == "double_elim":
+            # Simplified — check if GF is active
+            gf = bd.get("grand_final", {})
+            if gf.get("team1") and gf.get("team2") and "TBD" not in [gf.get("team1",""), gf.get("team2","")]:
+                return "Grand Final"
+            return "Elimination Stage"
+        elif system in ("round_robin",):
+            return "Round Robin"
+        elif system in ("groups", "group_bracket"):
+            stage = bd.get("bracket_stage", "groups")
+            return "Group Stage" if stage == "groups" else "Knockout Stage"
+        elif system in ("random_draw", "random_teams"):
+            rn = bd.get("round_num", 1)
+            return f"Round {rn}"
+        return "Bracket"
+
+    @staticmethod
+    def standings_rr(event) -> list:
+        """For round robin: return sorted standings."""
+        bd = event.get("bracket_data")
+        if not bd:
+            return []
+        teams = {}
+        for m in bd.get("matches", []):
+            for t in [m.get("team1"), m.get("team2")]:
+                if t and t not in ("BYE", "TBD"):
+                    teams.setdefault(t, {"name": t, "w": 0, "d": 0, "l": 0, "pts": 0, "gf": 0, "ga": 0})
+            if m.get("status") == "completed" and m.get("winner"):
+                w = m["winner"]; l = m["loser"]
+                score = m.get("score", "0-0")
+                try:
+                    g1, g2 = map(int, score.split("-"))
+                except:
+                    g1, g2 = 0, 0
+                if w in teams:
+                    teams[w]["w"] += 1; teams[w]["pts"] += 3
+                    teams[w]["gf"] += max(g1, g2); teams[w]["ga"] += min(g1, g2)
+                if l in teams:
+                    teams[l]["l"] += 1
+                    teams[l]["gf"] += min(g1, g2); teams[l]["ga"] += max(g1, g2)
+        return sorted(teams.values(), key=lambda x: (-x["pts"], -(x["gf"]-x["ga"]), -x["w"]))
+
+
+# ── Professional Announcement Builders ───────────────────────────────
+
+def build_match_card(event, match) -> discord.Embed:
+    """Cinematic match announcement embed."""
+    stage = TournamentEngine.current_stage_name(event)
+    t1    = match.get("team1", "?")
+    t2    = match.get("team2", "?")
+    fmt   = event.get("format", "")
+    bo    = BO_OPTIONS.get(event.get("settings", {}).get("bo_format", "bo1"), "Best of 1")
+
+    # Get Glory Points context if squads are known
+    t1_pts = squad_data["squads"].get(t1, {}).get("points", 0)
+    t2_pts = squad_data["squads"].get(t2, {}).get("points", 0)
+    t1_tag = SQUADS.get(t1, "⚔️")
+    t2_tag = SQUADS.get(t2, "⚔️")
+
+    embed = discord.Embed(
+        title=f"⚔️ {stage.upper()} — MATCH ALERT",
+        description=(
+            f"## {t1_tag} {t1}  🆚  {t2_tag} {t2}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🏆 **{event['name']}** · {fmt} · {bo}"
+        ),
+        color=ROYAL_RED,
+        timestamp=datetime.utcnow()
+    )
+    sched = match.get("scheduled_date") or match.get("date")
+    if sched:
+        embed.add_field(name="📅 Scheduled", value=f"**{sched}**", inline=True)
+    if t1_pts or t2_pts:
+        embed.add_field(
+            name="💎 Glory Standing",
+            value=f"**{t1}**: {t1_pts} pts  ·  **{t2}**: {t2_pts} pts",
+            inline=True
+        )
+    embed.add_field(name="🆔 Match ID", value=f"`{match.get('match_id','?')}`", inline=True)
+    embed.set_footer(text=f"⚜️ Majestic Dominion | {event['name']}")
+    apply_branding(embed, thumbnail=True)
+    return embed
+
+
+def build_result_card(event, result_info) -> discord.Embed:
+    """Cinematic result announcement with advancement/elimination."""
+    winner  = result_info["winner"]
+    loser   = result_info["loser"]
+    score   = result_info["match"].get("score", "?")
+    stage   = result_info["stage_name"]
+    t_complete = result_info["tournament_complete"]
+    r_complete = result_info["round_complete"]
+    next_ms    = result_info.get("next_matches", [])
+    champion   = result_info.get("champion")
+
+    w_tag = SQUADS.get(winner, "⚔️")
+    l_tag = SQUADS.get(loser, "⚔️")
+
+    if t_complete and champion:
+        title = "🏆 WE HAVE A CHAMPION!"
+        color = ROYAL_GOLD
+        desc  = (
+            f"## 👑 {w_tag} {winner}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"*The Crown recognizes the supreme sovereign of the Dominion!*\n\n"
+            f"🏆 **{event['name']}** — TOURNAMENT CHAMPION\n"
+            f"⚔️ Defeated **{l_tag} {loser}** · **{score}** in the {stage}"
+        )
+    elif r_complete and next_ms:
+        next_stage = TournamentEngine.current_stage_name(event)
+        title = f"🎯 {stage.upper()} COMPLETE — {next_stage.upper()} NEXT"
+        color = ROYAL_PURPLE
+        desc  = (
+            f"## {w_tag} {winner} advances!\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Defeated **{l_tag} {loser}** · **{score}**\n\n"
+            f"⏭️ The **{next_stage}** is now set!\n"
+            f"*{len(next_ms)} match(es) ready to be scheduled.*"
+        )
+    else:
+        title = f"⚔️ RESULT — {stage}"
+        color = ROYAL_GREEN
+        desc  = (
+            f"## {w_tag} {winner} ✅\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Defeated **{l_tag} {loser}** · **{score}**\n\n"
+            f"💀 **{loser}** has been eliminated" if event.get("tournament_system") in ("single_elim",) else
+            f"⚔️ Match recorded in **{event['name']}**"
+        )
+
+    embed = discord.Embed(title=title, description=desc, color=color, timestamp=datetime.utcnow())
+
+    # Next opponents
+    if next_ms and not t_complete:
+        lines = []
+        for m in next_ms[:4]:
+            t1 = m.get("team1", "TBD")
+            t2 = m.get("team2", "TBD")
+            if "TBD" not in [t1, t2]:
+                lines.append(f"⚔️ **{t1}** vs **{t2}**")
+        if lines:
+            embed.add_field(name="🔜 Next Matchups", value="\n".join(lines), inline=False)
+
+    embed.set_footer(text=f"⚜️ {event['name']} | Majestic Dominion")
+    apply_branding(embed, thumbnail=True)
+    return embed
+
+
+def build_round_complete_embed(event, stage_name, next_stage_name, next_matches) -> discord.Embed:
+    """Announce round completion + show next round."""
+    embed = discord.Embed(
+        title=f"🏁 {stage_name.upper()} — ROUND COMPLETE",
+        description=(
+            f"*The dust settles on {stage_name}.*\n\n"
+            f"⏭️ **{next_stage_name}** is now set!\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        ),
+        color=ROYAL_PURPLE,
+        timestamp=datetime.utcnow()
+    )
+    if next_matches:
+        lines = []
+        for m in next_matches[:8]:
+            t1 = m.get("team1", "TBD")
+            t2 = m.get("team2", "TBD")
+            sched = m.get("scheduled_date") or m.get("date", "")
+            sched_txt = f" · 📅 {sched}" if sched else ""
+            if "TBD" not in [t1, t2]:
+                lines.append(f"⚔️ **{t1}** vs **{t2}**{sched_txt}")
+        if lines:
+            embed.add_field(name=f"⚔️ {next_stage_name} Matchups", value="\n".join(lines), inline=False)
+    embed.set_footer(text=f"⚜️ {event['name']} | Majestic Dominion")
+    apply_branding(embed, thumbnail=True)
+    return embed
+
+
+def build_champion_embed(event, champion) -> discord.Embed:
+    """Grand cinematic champion announcement."""
+    ch_tag = SQUADS.get(champion, "👑")
+    results = event.get("match_results", [])
+    wins = sum(1 for r in results if r.get("winner") == champion)
+
+    embed = discord.Embed(
+        title="👑 CHAMPION CROWNED!",
+        description=(
+            f"## 🏆 {ch_tag} {champion}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"*The Crown of the Dominion has been claimed!*\n\n"
+            f"**{event['name']}** has its champion.\n"
+            f"*{wins} match(es) won through this tournament.*\n\n"
+            f"⚜️ *All hail the sovereign victor — may their reign be glorious!*"
+        ),
+        color=ROYAL_GOLD,
+        timestamp=datetime.utcnow()
+    )
+    embed.set_footer(text=f"⚜️ Majestic Dominion | {event['name']} — Final")
+    apply_branding(embed, thumbnail=False, author=True)
+    return embed
+
+
+def build_live_bracket_embed(event) -> discord.Embed:
+    """Live bracket with winners/losers highlighted."""
+    bd = event.get("bracket_data")
+    if not bd:
+        embed = discord.Embed(title="🏆 No Bracket", description="No bracket generated yet.", color=ROYAL_RED)
+        apply_branding(embed, thumbnail=True)
+        return embed
+
+    system = bd.get("system", "")
+    stage  = TournamentEngine.current_stage_name(event)
+    champ  = TournamentEngine.champion(event)
+    done   = TournamentEngine.is_complete(event)
+
+    title_prefix = "🏆" if done else "⚔️"
+    title_suffix = f" — 👑 {champ}" if done and champ else f" — {stage}"
+
+    embed = discord.Embed(
+        title=f"{title_prefix} {event['name']}{title_suffix}",
+        description=(
+            f"*{'Tournament concluded!' if done else 'Live bracket — results update automatically.'}*\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        ),
+        color=ROYAL_GOLD if done else ROYAL_PURPLE,
+        timestamp=datetime.utcnow()
+    )
+
+    per_field = 12
+
+    if system == "single_elim":
+        rounds = bd.get("rounds", [])
+        total  = len(rounds)
+        for ri, rnd in enumerate(rounds):
+            rn_idx = total - 1 - ri
+            rn = ROUND_NAMES_SE[rn_idx] if rn_idx < len(ROUND_NAMES_SE) else f"Round {ri+1}"
+            lines = []
+            for m in rnd:
+                status = m.get("status", "pending")
+                t1, t2 = m.get("team1","?"), m.get("team2","?")
+                if status == "completed":
+                    w = m.get("winner","?")
+                    l = m.get("loser", t2 if w == t1 else t1)
+                    sc = m.get("score","?")
+                    lines.append(f"✅ **{w}** def. ~~{l}~~ · {sc}")
+                elif status == "bye":
+                    lines.append(f"🚪 **{t1}** — BYE")
+                elif t2 in ("TBD", None) or t1 in ("TBD", None):
+                    lines.append(f"⏳ TBD vs TBD")
+                else:
+                    lines.append(f"⏳ **{t1}** vs **{t2}**")
+            for ci in range(0, len(lines), per_field):
+                chunk = "\n".join(lines[ci:ci+per_field])[:1024]
+                part  = f" ({ci//per_field+1})" if len(lines) > per_field else ""
+                embed.add_field(name=f"⚔️ {rn}{part}", value=chunk, inline=False)
+                if len(embed.fields) >= 24: break
+            if len(embed.fields) >= 24: break
+
+    elif system == "double_elim":
+        for ri, rnd in enumerate(bd.get("winners", [])):
+            lines = []
+            for m in rnd:
+                st = m.get("status","pending")
+                if st == "completed":
+                    lines.append(f"✅ **{m['winner']}** def. ~~{m['loser']}~~ · {m.get('score','?')}")
+                elif st == "bye":
+                    lines.append(f"🚪 **{m.get('team1','?')}** — BYE")
+                else:
+                    lines.append(f"⏳ **{m.get('team1','?')}** vs **{m.get('team2','?')}**")
+            if lines:
+                embed.add_field(name=f"🏆 WB Round {ri+1}", value="\n".join(lines)[:1024], inline=False)
+            if len(embed.fields) >= 12: break
+        for ri, rnd in enumerate(bd.get("losers", [])):
+            lines = []
+            for m in rnd:
+                st = m.get("status","pending")
+                if st == "completed":
+                    lines.append(f"✅ **{m['winner']}** def. ~~{m['loser']}~~ · {m.get('score','?')}")
+                else:
+                    lines.append(f"⏳ {m.get('team1','TBD')} vs {m.get('team2','TBD')}")
+            if lines:
+                embed.add_field(name=f"💀 LB Round {ri+1}", value="\n".join(lines)[:1024], inline=False)
+            if len(embed.fields) >= 20: break
+        gf = bd.get("grand_final", {})
+        if gf:
+            st = gf.get("status","pending")
+            val = (f"✅ **{gf['winner']}** def. ~~{gf['loser']}~~ · {gf.get('score','?')}"
+                   if st == "completed" else
+                   f"⏳ **{gf.get('team1','TBD')}** vs **{gf.get('team2','TBD')}**")
+            embed.add_field(name="🎯 Grand Final", value=val, inline=False)
+
+    elif system in ("round_robin", "groups", "group_bracket"):
+        # Show standings
+        standings = TournamentEngine.standings_rr(event)
+        if standings:
+            lines = ["**#  Team                W  L  Pts**"]
+            for i, s in enumerate(standings[:15], 1):
+                medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
+                lines.append(f"{medal} **{s['name']}** — {s['w']}W {s['l']}L **{s['pts']}pts**")
+            embed.add_field(name="📊 Standings", value="\n".join(lines)[:1024], inline=False)
+        # Show recent results
+        results = [m for m in bd.get("matches",[]) if m.get("status") == "completed"][-6:]
+        if results:
+            lines = [f"✅ **{m['winner']}** def. ~~{m['loser']}~~ · {m.get('score','?')}" for m in results]
+            embed.add_field(name="📜 Recent Results", value="\n".join(lines)[:1024], inline=False)
+
+    elif system in ("random_draw", "random_teams"):
+        matches = bd.get("matches", [])
+        pending_m   = [m for m in matches if m.get("status") == "pending"]
+        completed_m = [m for m in matches if m.get("status") == "completed"]
+        if completed_m:
+            lines = [f"✅ **{m['winner']}** def. ~~{m['loser']}~~ · {m.get('score','?')}"
+                     for m in completed_m[-8:]]
+            embed.add_field(name=f"✅ Results ({len(completed_m)})", value="\n".join(lines)[:1024], inline=False)
+        if pending_m:
+            lines = [f"⏳ **{m['team1']}** vs **{m['team2']}**" for m in pending_m[:8]]
+            embed.add_field(name=f"⏳ Pending ({len(pending_m)})", value="\n".join(lines)[:1024], inline=False)
+
+    if champ and done:
+        embed.add_field(name="👑 Champion", value=f"**{champ}**", inline=False)
+
+    embed.set_footer(text=f"⚜️ {event['name']} | ID: {event['id']} | Majestic Dominion")
+    apply_branding(embed, thumbnail=True)
+    return embed
+
+
+def build_standings_embed(event) -> discord.Embed:
+    """Round-robin standings table."""
+    standings = TournamentEngine.standings_rr(event)
+    embed = discord.Embed(
+        title=f"📊 Standings — {event['name']}",
+        color=ROYAL_PURPLE,
+        timestamp=datetime.utcnow()
+    )
+    if not standings:
+        embed.description = "*No results recorded yet.*"
+    else:
+        lines = []
+        for i, s in enumerate(standings, 1):
+            medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"**{i}.**"
+            gd = s['gf'] - s['ga']
+            lines.append(
+                f"{medal} **{s['name']}** — {s['w']}W/{s['l']}L · **{s['pts']} pts** · GD {'+' if gd >= 0 else ''}{gd}"
+            )
+        embed.description = "\n".join(lines)[:2048]
+    embed.set_footer(text=f"⚜️ Majestic Dominion | {event['name']}")
+    apply_branding(embed, thumbnail=True)
+    return embed
+
+
+# ── Mod Tools: Event Match Recording ─────────────────────────────────
+
+class EventMatchRecordView(View):
+    """
+    Mod tool: record a result for a match within an event.
+    Automatically advances the bracket and announces results.
+    """
+    def __init__(self, event, matches, author_id):
+        super().__init__(timeout=180)
+        self.event     = event
+        self.author_id = author_id
+
+        if not matches:
+            return
+
+        opts = []
+        for m in matches[:25]:
+            t1    = m.get("team1", "?")
+            t2    = m.get("team2", "?")
+            label = f"{t1[:20]} vs {t2[:20]}"
+            desc  = f"{m.get('round_display','') or m.get('round_label','')} · {m.get('match_id','')}"
+            opts.append(discord.SelectOption(label=label[:100], value=m["match_id"],
+                description=desc[:100], emoji="⚔️"))
+        if opts:
+            sel = Select(placeholder="⚔️ Select match to record result...", options=opts)
+            sel.callback = self._selected
+            self.add_item(sel)
+
+    async def _selected(self, interaction):
+        if interaction.user.id != self.author_id:
+            return await interaction.response.send_message("❌ Not your session.", ephemeral=True)
+        mid   = interaction.data["values"][0]
+        match = TournamentEngine.find_match(self.event, mid)
+        if not match:
+            return await interaction.response.send_message("❌ Match not found.", ephemeral=True)
+        await interaction.response.send_modal(
+            EventMatchScoreModal(self.event, match, interaction.user.id)
+        )
+
+
+class EventMatchScoreModal(Modal, title="⚔️ Record Match Result"):
+    score_input = TextInput(
+        label="Score  (team1 - team2)",
+        placeholder="e.g.  2-0  or  1-1",
+        required=True, max_length=10
+    )
+
+    def __init__(self, event, match, author_id):
+        super().__init__()
+        self.event     = event
+        self.match     = match
+        self.author_id = author_id
+        t1 = match.get("team1","?")
+        t2 = match.get("team2","?")
+        self.score_input.label = f"{t1[:15]} vs {t2[:15]}"
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            s1, s2 = map(int, self.score_input.value.strip().split("-"))
+        except:
+            return await interaction.response.send_message(
+                "❌ Use format X-Y (e.g. 2-0)", ephemeral=True)
+
+        t1 = self.match["team1"]
+        t2 = self.match["team2"]
+        if s1 == s2:
+            return await interaction.response.send_message(
+                "❌ Draws not supported in elimination brackets. Please re-enter.", ephemeral=True)
+
+        winner = t1 if s1 > s2 else t2
+        score  = self.score_input.value.strip()
+
+        # Record via engine
+        prev_stage  = TournamentEngine.current_stage_name(self.event)
+        result_info = TournamentEngine.record_result(
+            self.event, self.match["match_id"], winner, score, interaction.user.id
+        )
+        save_data(squad_data)
+
+        # Confirm to mod
+        conf = discord.Embed(
+            title="✅ Result Recorded",
+            description=(
+                f"**{winner}** defeated **{t2 if winner == t1 else t1}** — **{score}**\n"
+                f"Stage: {prev_stage}\n"
+                + ("🏁 Round complete — bracket auto-advanced!" if result_info["round_complete"] else "")
+                + ("🏆 **Tournament concluded!** Champion: " + (result_info["champion"] or "?") if result_info["tournament_complete"] else "")
+            ),
+            color=ROYAL_GREEN
+        )
+        apply_branding(conf, thumbnail=True)
+        await interaction.response.send_message(embed=conf, ephemeral=True)
+
+        # Professional announcement
+        result_card = build_result_card(self.event, result_info)
+        await announce_event(interaction.guild, result_card)
+
+        # Champion announcement
+        if result_info["tournament_complete"] and result_info["champion"]:
+            champ_embed = build_champion_embed(self.event, result_info["champion"])
+            await announce_major(interaction.guild, champ_embed)
+
+        # Round complete announcement
+        elif result_info["round_complete"] and result_info["next_matches"]:
+            next_stage  = TournamentEngine.current_stage_name(self.event)
+            round_embed = build_round_complete_embed(
+                self.event, prev_stage, next_stage, result_info["next_matches"])
+            await announce_event(interaction.guild, round_embed)
+
+        await log_action(interaction.guild, "⚔️ Event Match Recorded",
+            f"{interaction.user.mention} recorded **{winner}** def. **{t2 if winner == t1 else t1}** "
+            f"({score}) in **{self.event['name']}** [{prev_stage}]")
+
+
+# ── Mod Tools: Registration Management ───────────────────────────────
+
+class ManageRegistrationsView(View):
+    """Full registrant management for mods."""
+    def __init__(self, event, author_id, guild):
+        super().__init__(timeout=180)
+        self.event     = event
+        self.author_id = author_id
+        self.guild     = guild
+
+    @discord.ui.button(label="➕ Add Registrant", style=discord.ButtonStyle.success, row=0)
+    async def add_btn(self, interaction, button):
+        if interaction.user.id != self.author_id: return
+        await interaction.response.send_modal(AddRegistrantModal(self.event, self.author_id))
+
+    @discord.ui.button(label="🗑️ Remove Registrant", style=discord.ButtonStyle.danger, row=0)
+    async def remove_btn(self, interaction, button):
+        if interaction.user.id != self.author_id: return
+        regs = self.event.get("registrations", [])
+        if not regs:
+            return await interaction.response.send_message("❌ No registrations.", ephemeral=True)
+        opts = [discord.SelectOption(label=get_reg_name(r)[:100], value=str(i),
+                    description=f"Registered {r.get('registered_at','')[:10]}")
+                for i, r in enumerate(regs[:25])]
+        embed = discord.Embed(title="🗑️ Remove Registrant", color=ROYAL_RED,
+            description="Select who to remove:")
+        apply_branding(embed, thumbnail=True)
+        await interaction.response.send_message(embed=embed,
+            view=RemoveRegistrantView(self.event, opts, self.author_id), ephemeral=True)
+
+    @discord.ui.button(label="✏️ Replace Registrant", style=discord.ButtonStyle.primary, row=0)
+    async def replace_btn(self, interaction, button):
+        if interaction.user.id != self.author_id: return
+        regs = self.event.get("registrations", [])
+        if not regs:
+            return await interaction.response.send_message("❌ No registrations.", ephemeral=True)
+        await interaction.response.send_modal(ReplaceRegistrantModal(self.event, self.author_id))
+
+    @discord.ui.button(label="📋 View All", style=discord.ButtonStyle.secondary, row=1)
+    async def view_btn(self, interaction, button):
+        if interaction.user.id != self.author_id: return
+        embed, _ = build_registrations_embed(self.event, 1, self.guild)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @discord.ui.button(label="🔄 Refresh", style=discord.ButtonStyle.secondary, row=1)
+    async def refresh_btn(self, interaction, button):
+        if interaction.user.id != self.author_id: return
+        regs = self.event.get("registrations", [])
+        embed = discord.Embed(title=f"👥 Registrations — {self.event['name']}",
+            description=f"**{len(regs)}** registered", color=ROYAL_PURPLE)
+        apply_branding(embed, thumbnail=True)
+        await interaction.response.edit_message(embed=embed, view=self)
+
+
+class AddRegistrantModal(Modal, title="➕ Add Registrant"):
+    name_input = TextInput(label="Team/Player name", placeholder="e.g. Team Alpha or PlayerX",
+        required=True, max_length=80)
+    def __init__(self, event, author_id):
+        super().__init__(); self.event = event; self.author_id = author_id
+
+    async def on_submit(self, interaction):
+        name = self.name_input.value.strip()
+        # Check duplicates
+        existing = [get_reg_name(r) for r in self.event.get("registrations", [])]
+        if name in existing:
+            return await interaction.response.send_message(
+                f"❌ **{name}** is already registered.", ephemeral=True)
+        rm = self.event.get("registration_mode", "solo")
+        if rm == "solo":
+            self.event["registrations"].append({
+                "player_id": None, "player_name": name,
+                "registered_at": datetime.utcnow().isoformat(), "added_by_mod": True
+            })
+        else:
+            self.event["registrations"].append({
+                "team_name": name, "leader_id": None, "members": [],
+                "registered_at": datetime.utcnow().isoformat(), "added_by_mod": True
+            })
+        save_data(squad_data)
+        embed = discord.Embed(title="✅ Registrant Added",
+            description=f"**{name}** added to **{self.event['name']}**.", color=ROYAL_GREEN)
+        apply_branding(embed, thumbnail=True)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await log_action(interaction.guild, "➕ Mod Added Registrant",
+            f"{interaction.user.mention} manually added **{name}** to **{self.event['name']}**")
+
+
+class ReplaceRegistrantModal(Modal, title="✏️ Replace Registrant"):
+    old_name = TextInput(label="Current name (exact)", required=True, max_length=80)
+    new_name = TextInput(label="Replacement name",     required=True, max_length=80)
+    def __init__(self, event, author_id):
+        super().__init__(); self.event = event; self.author_id = author_id
+
+    async def on_submit(self, interaction):
+        old = self.old_name.value.strip()
+        new = self.new_name.value.strip()
+        replaced = False
+        for reg in self.event.get("registrations", []):
+            if get_reg_name(reg) == old:
+                if reg.get("team_name"):   reg["team_name"] = new
+                elif reg.get("player_name"): reg["player_name"] = new
+                replaced = True
+                break
+        if not replaced:
+            return await interaction.response.send_message(
+                f"❌ **{old}** not found in registrations.", ephemeral=True)
+        # Also update in bracket_data if tournament has started
+        bd = self.event.get("bracket_data")
+        if bd:
+            import json
+            bd_str = json.dumps(bd).replace(f'"{old}"', f'"{new}"')
+            self.event["bracket_data"] = json.loads(bd_str)
+        save_data(squad_data)
+        embed = discord.Embed(title="✅ Registrant Replaced",
+            description=f"**{old}** → **{new}** in **{self.event['name']}**.", color=ROYAL_GREEN)
+        apply_branding(embed, thumbnail=True)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await log_action(interaction.guild, "✏️ Registrant Replaced",
+            f"{interaction.user.mention} replaced **{old}** with **{new}** in **{self.event['name']}**")
+
+
+# ── Mod Tools: Force Advance & Override ──────────────────────────────
+
+class ForceAdvanceView(View):
+    """Manually advance tournament if auto-progression fails."""
+    def __init__(self, event, author_id):
+        super().__init__(timeout=120)
+        self.event = event; self.author_id = author_id
+
+    @discord.ui.button(label="⚡ Force Next Round", style=discord.ButtonStyle.danger, row=0)
+    async def force_btn(self, interaction, button):
+        if interaction.user.id != self.author_id: return
+        bd = self.event.get("bracket_data")
+        if not bd:
+            return await interaction.response.send_message("❌ No bracket.", ephemeral=True)
+        cur = bd.get("current_round", 0)
+        rounds = bd.get("rounds", [])
+        if cur + 1 < len(rounds):
+            bd["current_round"] = cur + 1
+            save_data(squad_data)
+            embed = discord.Embed(title="⚡ Force Advanced",
+                description=f"Advanced to **Round {cur + 2}** manually.", color=ROYAL_GOLD)
+            apply_branding(embed, thumbnail=True)
+            await interaction.response.edit_message(embed=embed, view=None)
+            await log_action(interaction.guild, "⚡ Force Advanced",
+                f"{interaction.user.mention} force-advanced **{self.event['name']}** to round {cur+2}")
+        else:
+            await interaction.response.send_message("❌ No further rounds to advance to.", ephemeral=True)
+
+    @discord.ui.button(label="🏆 Declare Winner", style=discord.ButtonStyle.success, row=0)
+    async def declare_btn(self, interaction, button):
+        if interaction.user.id != self.author_id: return
+        await interaction.response.send_modal(DeclareWinnerModal(self.event, self.author_id))
+
+
+class DeclareWinnerModal(Modal, title="🏆 Declare Tournament Winner"):
+    winner_name = TextInput(label="Winner name (exact registration name)",
+        placeholder="e.g. Team Alpha", required=True, max_length=80)
+    def __init__(self, event, author_id):
+        super().__init__(); self.event = event; self.author_id = author_id
+
+    async def on_submit(self, interaction):
+        winner = self.winner_name.value.strip()
+        self.event["status"]  = "completed"
+        self.event["champion"] = winner
+        bd = self.event.get("bracket_data")
+        if bd:
+            bd["champion"] = winner
+        save_data(squad_data)
+        embed = discord.Embed(title="🏆 Winner Declared",
+            description=f"**{winner}** declared champion of **{self.event['name']}**.",
+            color=ROYAL_GOLD)
+        apply_branding(embed, thumbnail=True)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        champ_embed = build_champion_embed(self.event, winner)
+        await announce_major(interaction.guild, champ_embed)
+        await log_action(interaction.guild, "🏆 Winner Declared",
+            f"{interaction.user.mention} declared **{winner}** as winner of **{self.event['name']}**")
+
+
+# ── Updated EventManagerView ──────────────────────────────────────────
+
+class EventManagerViewV2(View):
+    """Full event management dashboard — replaces EventManagerView."""
+    def __init__(self):
+        super().__init__(timeout=300)
+
+    @discord.ui.button(label="Create", emoji="➕", style=discord.ButtonStyle.success, row=0)
+    async def create_btn(self, interaction, button):
+        await interaction.response.send_modal(CreateEventModal())
+
+    @discord.ui.button(label="Edit", emoji="✏️", style=discord.ButtonStyle.primary, row=0)
+    async def edit_btn(self, interaction, button):
+        evs = get_all_events()
+        if not evs: return await interaction.response.send_message("❌ No events.", ephemeral=True)
+        embed = discord.Embed(title="✏️ Edit Event", description="Select:", color=ROYAL_GOLD)
+        apply_branding(embed, thumbnail=True)
+        await interaction.response.send_message(embed=embed,
+            view=EventActionSelectViewV2(evs, "edit", interaction.user.id), ephemeral=True)
+
+    @discord.ui.button(label="Delete", emoji="🗑️", style=discord.ButtonStyle.danger, row=0)
+    async def delete_btn(self, interaction, button):
+        evs = get_all_events()
+        if not evs: return await interaction.response.send_message("❌ No events.", ephemeral=True)
+        embed = discord.Embed(title="🗑️ Delete Event", description="Select:", color=ROYAL_RED)
+        apply_branding(embed, thumbnail=True)
+        await interaction.response.send_message(embed=embed,
+            view=EventActionSelectViewV2(evs, "delete", interaction.user.id), ephemeral=True)
+
+    @discord.ui.button(label="📝 Record Match", style=discord.ButtonStyle.danger, emoji="⚔️", row=1)
+    async def record_match_btn(self, interaction, button):
+        """Record a result within an active tournament."""
+        evs = [e for e in get_all_events() if e["status"] in ("live", "open")
+               and (e.get("bracket_data") or e.get("type") == "fun")]
+        if not evs:
+            return await interaction.response.send_message(
+                "❌ No active events. Start an event first.", ephemeral=True)
+        embed = discord.Embed(title="⚔️ Record Match Result", description="Select event:", color=ROYAL_RED)
+        apply_branding(embed, thumbnail=True)
+        await interaction.response.send_message(embed=embed,
+            view=EventActionSelectView(evs, "record_match", interaction.user.id), ephemeral=True)
+
+    @discord.ui.button(label="👥 Registrations", emoji="📋", style=discord.ButtonStyle.secondary, row=1)
+    async def regs_btn(self, interaction, button):
+        evs = get_all_events()
+        if not evs: return await interaction.response.send_message("❌ No events.", ephemeral=True)
+        embed = discord.Embed(title="📋 Manage Registrations", description="Select event:", color=ROYAL_PURPLE)
+        apply_branding(embed, thumbnail=True)
+        await interaction.response.send_message(embed=embed,
+            view=EventActionSelectViewV2(evs, "regs", interaction.user.id), ephemeral=True)
+
+    @discord.ui.button(label="▶️ Start", style=discord.ButtonStyle.success, row=2)
+    async def start_btn(self, interaction, button):
+        evs = [e for e in get_all_events() if e["status"] == "open"]
+        if not evs: return await interaction.response.send_message("❌ No open events.", ephemeral=True)
+        embed = discord.Embed(title="▶️ Start Event", description="Select:", color=ROYAL_GREEN)
+        apply_branding(embed, thumbnail=True)
+        await interaction.response.send_message(embed=embed,
+            view=EventActionSelectViewV2(evs, "start", interaction.user.id), ephemeral=True)
+
+    @discord.ui.button(label="⏹️ Close", style=discord.ButtonStyle.danger, row=2)
+    async def close_btn(self, interaction, button):
+        evs = [e for e in get_all_events() if e["status"] in ("live","open")]
+        if not evs: return await interaction.response.send_message("❌ No active events.", ephemeral=True)
+        embed = discord.Embed(title="⏹️ Close Event", description="Select:", color=ROYAL_RED)
+        apply_branding(embed, thumbnail=True)
+        await interaction.response.send_message(embed=embed,
+            view=EventActionSelectViewV2(evs, "close", interaction.user.id), ephemeral=True)
+
+    @discord.ui.button(label="🎲 Randomize", style=discord.ButtonStyle.primary, row=2)
+    async def random_btn(self, interaction, button):
+        evs = get_all_events()
+        if not evs: return await interaction.response.send_message("❌ No events.", ephemeral=True)
+        embed = discord.Embed(title="🎲 Randomize", description="Select event:", color=ROYAL_PURPLE)
+        apply_branding(embed, thumbnail=True)
+        await interaction.response.send_message(embed=embed,
+            view=EventActionSelectViewV2(evs, "randomize", interaction.user.id), ephemeral=True)
+
+    @discord.ui.button(label="📅 Schedule", style=discord.ButtonStyle.secondary, row=2)
+    async def schedule_btn(self, interaction, button):
+        evs = [e for e in get_all_events() if e.get("bracket_data")]
+        if not evs:
+            return await interaction.response.send_message("❌ No events with brackets.", ephemeral=True)
+        embed = discord.Embed(title="📅 Schedule Matches", description="Select event:", color=ROYAL_GOLD)
+        apply_branding(embed, thumbnail=True)
+        await interaction.response.send_message(embed=embed,
+            view=EventActionSelectViewV2(evs, "schedule", interaction.user.id), ephemeral=True)
+
+    @discord.ui.button(label="⚡ Force Tools", style=discord.ButtonStyle.secondary, row=3)
+    async def force_btn(self, interaction, button):
+        evs = [e for e in get_all_events() if e.get("bracket_data")]
+        if not evs: return await interaction.response.send_message("❌ No events.", ephemeral=True)
+        embed = discord.Embed(title="⚡ Force Tools", description="Select event:", color=ROYAL_GOLD)
+        apply_branding(embed, thumbnail=True)
+        await interaction.response.send_message(embed=embed,
+            view=EventActionSelectView(evs, "force", interaction.user.id), ephemeral=True)
+
+    @discord.ui.button(label="🔄 Refresh", style=discord.ButtonStyle.secondary, row=3)
+    async def refresh_btn(self, interaction, button):
+        await interaction.response.edit_message(embed=build_event_manager_embed(), view=EventManagerViewV2())
+
+
+# ── Updated EventActionSelectView to handle new actions ──────────────
+
+class EventActionSelectViewV2(View):
+    """Handles all event manager actions including new ones."""
+    def __init__(self, events, action, author_id):
+        super().__init__(timeout=180)
+        self.action = action; self.author_id = author_id
+        opts = [discord.SelectOption(
+            label=ev["name"][:100], value=ev["id"], emoji="🎪",
+            description=f"{ev['type'].title()} · {ev['status']} · {len(ev.get('registrations',[]))} reg'd")
+            for ev in events[:25]]
+        sel = Select(placeholder="🎪 Select an event...", options=opts)
+        sel.callback = self._selected
+        self.add_item(sel)
+
+    async def _selected(self, interaction):
+        if interaction.user.id != self.author_id:
+            return await interaction.response.send_message("❌ Not your session.", ephemeral=True)
+        eid   = interaction.data["values"][0]
+        event = get_event_by_id(eid)
+        if not event:
+            return await interaction.response.send_message("❌ Event not found.", ephemeral=True)
+
+        if self.action == "record_match":
+            # Social events use their own manager
+            if event.get("type") == "fun":
+                embed = build_social_dashboard_embed(event)
+                view  = SocialEventManagerView(event, interaction.user.id)
+                return await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+            pending = TournamentEngine.pending_matches(event)
+            if not pending:
+                return await interaction.response.send_message(
+                    "❌ No pending matches. All matches may be complete, or bracket not generated yet.",
+                    ephemeral=True)
+            embed = discord.Embed(
+                title=f"⚔️ Record Result — {event['name']}",
+                description=f"**{len(pending)}** match(es) pending. Select one to record:",
+                color=ROYAL_RED
+            )
+            # Add context about current stage
+            stage = TournamentEngine.current_stage_name(event)
+            embed.add_field(name="📍 Current Stage", value=stage, inline=True)
+            embed.add_field(name="⏳ Pending", value=str(len(pending)), inline=True)
+            apply_branding(embed, thumbnail=True)
+            # Add round labels to matches for display
+            for m in pending:
+                if not m.get("round_display") and not m.get("round_label"):
+                    m["round_display"] = stage
+            await interaction.response.send_message(embed=embed,
+                view=EventMatchRecordView(event, pending, interaction.user.id), ephemeral=True)
+
+        elif self.action == "regs":
+            embed, _ = build_registrations_embed(event, 1, interaction.guild)
+            await interaction.response.send_message(embed=embed,
+                view=ManageRegistrationsView(event, interaction.user.id, interaction.guild),
+                ephemeral=True)
+
+        elif self.action == "force":
+            pending = TournamentEngine.pending_matches(event)
+            stage   = TournamentEngine.current_stage_name(event)
+            champ   = TournamentEngine.champion(event)
+            embed = discord.Embed(
+                title=f"⚡ Force Tools — {event['name']}",
+                description=(
+                    f"Stage: **{stage}**\n"
+                    f"Pending matches: **{len(pending)}**\n"
+                    + (f"Champion: **{champ}**" if champ else "*Tournament in progress*")
+                ),
+                color=ROYAL_GOLD
+            )
+            apply_branding(embed, thumbnail=True)
+            await interaction.response.send_message(embed=embed,
+                view=ForceAdvanceView(event, interaction.user.id), ephemeral=True)
+
+        elif self.action == "start":
+            event["status"] = "live"; save_data(squad_data)
+            embed = discord.Embed(title="▶️ Event Live!",
+                description=f"**{event['name']}** is now **LIVE**.", color=ROYAL_GREEN)
+            apply_branding(embed, thumbnail=True)
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            pub = discord.Embed(title="⚔️ THE ARENA IS OPEN!",
+                description=(
+                    f"**{event['name']}** is now **LIVE**!\n\n"
+                    f"⚔️ *{event.get('format','?')} · {event.get('description','')}*\n\n"
+                    f"*May the best sovereign prevail!*"
+                ),
+                color=ROYAL_GOLD)
+            await announce_major(interaction.guild, pub)
+            await log_action(interaction.guild, "▶️ Event Started",
+                f"{interaction.user.mention} started **{event['name']}**")
+
+        elif self.action == "close":
+            event["status"] = "completed"; save_data(squad_data)
+            champ = TournamentEngine.champion(event)
+            embed = discord.Embed(title="⏹️ Event Closed!",
+                description=f"**{event['name']}** is now closed." + (f"\n👑 Champion: **{champ}**" if champ else ""),
+                color=ROYAL_RED)
+            apply_branding(embed, thumbnail=True)
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            pub = discord.Embed(title="🏁 EVENT CONCLUDED!",
+                description=f"**{event['name']}** has concluded!\n\n" +
+                    (f"👑 **Champion: {champ}**\n" if champ else "") +
+                    "*Glory and honour to all who competed!*",
+                color=ROYAL_PURPLE)
+            await announce_major(interaction.guild, pub)
+            await log_action(interaction.guild, "⏹️ Event Closed",
+                f"{interaction.user.mention} closed **{event['name']}**")
+
+        elif self.action == "edit":
+            await interaction.response.send_modal(EditEventModal(event))
+
+        elif self.action == "delete":
+            embed = discord.Embed(title=f"🗑️ Delete '{event['name']}'?",
+                description=f"Deletes event and **{len(event.get('registrations',[]))}** registrations.",
+                color=ROYAL_RED)
+            apply_branding(embed, thumbnail=True)
+            await interaction.response.send_message(embed=embed,
+                view=ConfirmDeleteEventView(event), ephemeral=True)
+
+        elif self.action == "randomize":
+            embed = discord.Embed(title=f"🎲 Randomize — {event['name']}",
+                description=(
+                    "**Row 0 — Simple Draws** (no bracket)\n"
+                    "🎲 Random Draw · 👥 Random Teams · 🎯 Pick One · 👥 Gather Group\n\n"
+                    "**Row 1 — Bracket Systems**\n"
+                    "🏆 Single Elim · ⚔️ Double Elim · 🔄 Round Robin\n\n"
+                    "**Row 2 — Groups**\n"
+                    "🎲 Random Groups · 🎯 Groups→Bracket · 🗑️ Clear"
+                ),
+                color=ROYAL_PURPLE)
+            apply_branding(embed, thumbnail=True)
+            await interaction.response.send_message(embed=embed,
+                view=RandomizeView(event, interaction.user.id), ephemeral=True)
+
+        elif self.action == "schedule":
+            unscheduled = get_unscheduled_matches(event)
+            if not unscheduled:
+                return await interaction.response.send_message(
+                    "✅ All matches scheduled, or no bracket yet.", ephemeral=True)
+            embed = discord.Embed(title=f"📅 Schedule — {event['name']}",
+                description=f"**{len(unscheduled)}** unscheduled matches:", color=ROYAL_GOLD)
+            apply_branding(embed, thumbnail=True)
+            await interaction.response.send_message(embed=embed,
+                view=ScheduleMatchSelectView(event, unscheduled, interaction.user.id), ephemeral=True)
+
+
+# ── Updated public EventDetailView ───────────────────────────────────
+
+class EventDetailViewV2(View):
+    """Enhanced detail view with live bracket access."""
+    def __init__(self, event, user_id):
+        super().__init__(timeout=180)
+        self.event   = event
+        self.user_id = user_id
+        already  = is_registered(event, user_id)
+        is_open  = event["status"] in ("open", "registration")
+        self.register_btn.disabled = already or not is_open
+        if already:
+            self.register_btn.label = "✅ Registered"
+            self.register_btn.style = discord.ButtonStyle.success
+        elif not is_open:
+            self.register_btn.label = f"🔒 {event['status'].upper()}"
+        self.cancel_btn.disabled   = not already
+        self.bracket_btn.disabled  = not event.get("bracket_data")
+        self.schedule_btn.disabled = not event.get("schedule")
+        self.standings_btn.disabled = event.get("bracket_data", {}).get("system") not in ("round_robin","groups","group_bracket")
+
+    @discord.ui.button(label="📝 Register",            style=discord.ButtonStyle.success, row=0)
+    async def register_btn(self, interaction, button):
+        await handle_registration(interaction, self.event)
+
+    @discord.ui.button(label="❌ Cancel Registration", style=discord.ButtonStyle.danger,  row=0)
+    async def cancel_btn(self, interaction, button):
+        await handle_cancel_registration(interaction, self.event)
+
+    @discord.ui.button(label="👥 Registrations",       style=discord.ButtonStyle.secondary, row=1)
+    async def regs_btn(self, interaction, button):
+        embed, _ = build_registrations_embed(self.event, 1, interaction.guild)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @discord.ui.button(label="🏆 Live Bracket",        style=discord.ButtonStyle.primary,   row=1)
+    async def bracket_btn(self, interaction, button):
+        embed = build_live_bracket_embed(self.event)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @discord.ui.button(label="📅 Schedule",            style=discord.ButtonStyle.secondary, row=1)
+    async def schedule_btn(self, interaction, button):
+        embed, total = build_schedule_embed(self.event)
+        view = SchedulePageView(self.event, 1, interaction.user.id) if total > 1 else None
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+    @discord.ui.button(label="📊 Standings",           style=discord.ButtonStyle.secondary, row=1)
+    async def standings_btn(self, interaction, button):
+        embed = build_standings_embed(self.event)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+# =====================================================================
+#              SOCIAL EVENT ENGINE — Creative Esports Companion
+# =====================================================================
+
+# =====================================================================
+#                SOCIAL EVENT ENGINE — Creative Esports Companion
+# =====================================================================
+#
+#  Social events are NOT tournaments. They're experiences:
+#  Hide & Seek, FFA, community games, themed events, special modes.
+#
+#  This engine provides:
+#   • Points-based leaderboard (not elimination)
+#   • Round-by-round scoring with fun recaps
+#   • Creative random moments (Spotlight, Chaos, Sudden Death)
+#   • MVP & award system
+#   • Event Moments log for highlights
+#   • Crowd engagement features
+#   • Cinematic social-flavored announcements
+# =====================================================================
+
+import json as _json
+
+# ── Social event constants ────────────────────────────────────────────
+
+# ── Mobile Legends: Bang Bang — Social Event Constants ───────────────
+
+SCORING_SYSTEMS = {
+    "wins":      ("🏆", "Match Wins",    "3 pts per win, 1 per draw, 0 per loss"),
+    "kills":     ("⚔️", "Kill Count",    "Points = kills submitted for the round"),
+    "kda":       ("💀", "KDA Score",     "Points based on (K+A)/D ratio submitted"),
+    "mvp_stars": ("⭐", "MVP Stars",     "MLBB MVP stars earned (1–3 per match)"),
+    "damage":    ("💥", "Damage Dealt",  "Total hero damage submitted as score"),
+    "rank":      ("🏅", "Placement",     "1st=5pts 2nd=3pts 3rd=2pts 4th=1pt 5th+=0"),
+    "custom":    ("💎", "Custom Points", "Mod assigns points manually per result"),
+}
+
+SOCIAL_FLAVORS = {
+    "hide_seek":      "🙈 Hide & Seek",
+    "protect_layla":  "🛡️ Protect Layla",
+    "one_v_one":      "🗡️ 1v1",
+    "kill_race":      "⚔️ Kill Race",
+    "brawl":          "🥊 Brawl Mode",
+    "all_random":     "🎲 All Random",
+    "hero_lock":      "🦸 Hero Lock",
+    "magic_chess":    "♟️ Magic Chess",
+    "kda_war":        "💀 KDA War",
+    "draft_pick":     "📋 Draft Pick 5v5",
+    "custom":         "⚙️ Custom Mode",
+}
+
+MLBB_EVENT_FORMATS = {
+    "hide_seek": (
+        "1 Natalia (Hider) vs 3 Seekers in a custom room. "
+        "Seekers wait 1 min in base. Natalia hides and must stay still. "
+        "3 min time limit. Seekers win by finding Natalia + emoting. "
+        "Natalia wins if not found. "
+        "Rules: No skills, no attacks, no invisibility, no jungle. "
+        "Only Sprint/Arrival allowed. "
+        "Twist: the winner becomes Natalia next round."
+    ),
+    "protect_layla": (
+        "3v3 custom match. One team has Layla and must protect her from dying. "
+        "The other team must kill Layla to win. "
+        "If Layla is killed → attackers win. If Layla survives → defenders win. "
+        "Rules set by mod each round."
+    ),
+    "one_v_one": (
+        "1v1 in MLBB custom room. No lane restriction. "
+        "First to the agreed kill count wins the round. "
+        "Heroes chosen freely unless mod declares a hero lock."
+    ),
+    "kill_race": (
+        "All players in the same custom match. "
+        "Whoever reaches the agreed kill target first wins that round. "
+        "Submit your kill count to the mod at the end."
+    ),
+    "brawl": (
+        "Brawl mode with random heroes. "
+        "Win = 3pts, Loss = 0pts. "
+        "Track wins across rounds to determine the overall winner."
+    ),
+    "all_random": (
+        "All Random mode — heroes assigned randomly each round. "
+        "Best record (most wins or best KDA) across all rounds wins."
+    ),
+    "hero_lock": (
+        "Everyone must play the same hero — mod announces the hero each round. "
+        "Best performance (KDA, kills, or wins) decides the round winner."
+    ),
+    "magic_chess": (
+        "Magic Chess custom lobby. Placement scoring: "
+        "1st = 5pts · 2nd = 3pts · 3rd = 2pts · 4th = 1pt · 5th+ = 0pts."
+    ),
+    "kda_war": (
+        "Play a full classic or ranked match. "
+        "Submit your final KDA ratio to the mod. "
+        "Best KDA wins the round."
+    ),
+    "draft_pick": (
+        "Full 5v5 draft pick match between registered teams. "
+        "Win = 3pts · Loss = 0pts. Brackets handled by mod."
+    ),
+    "custom": "Mod-defined format. Rules announced per round.",
+}
+
+HIGHLIGHT_EMOJIS = ["🔥", "💥", "⚡", "🌟", "👑", "🎯", "💎", "🏆", "⚔️", "🌀"]
+
+ROUND_HYPE_LINES = [
+    "The Land of Dawn trembles — who will dominate this round?",
+    "Heroes clash and kingdoms fall — may the best player rise!",
+    "The battlefield is set — prove your worth in the Land of Dawn!",
+    "No recalls, no mercy — only dominance survives!",
+    "The crowd in the arena roars — fighters, to your lanes!",
+    "Fortune favours the bold. Crush your enemies and take the throne!",
+    "The royal court watches — make every kill count!",
+    "Turrets fall, heroes die — the next champion is about to emerge!",
+    "Push the lord, take the base — glory goes to the decisive!",
+    "Every gold, every kill, every teamfight — it all matters NOW!",
+]
+
+RESULT_HYPE_LINES = [
+    "What a performance in the Land of Dawn!",
+    "The crowd goes absolutely wild!",
+    "A legendary showing from our fighters tonight!",
+    "History is being written in the chronicles of the Dominion!",
+    "The Oracle could not have predicted this — extraordinary!",
+    "Pure mechanical skill on display — the enemy nexus never stood a chance!",
+    "The late-game carry was REAL tonight!",
+    "That KDA doesn't lie — someone showed up to perform!",
+]
+
+
+# ── SocialEventEngine ─────────────────────────────────────────────────
+
+class SocialEventEngine:
+    """
+    Engine for social/fun events.
+    Manages rounds, points, leaderboard, moments, and progression.
+    """
+
+    @staticmethod
+    def init_social_data(event):
+        """Ensure event has all social-specific fields."""
+        event.setdefault("social_data", {
+            "rounds": [],
+            "leaderboard": {},
+            "moments": [],          # logged highlights
+            "scoring_system": "points",
+            "points_per_win":  3,
+            "points_per_draw": 1,
+            "points_per_loss": 0,
+            "mvp": None,
+            "flavor": "custom",
+            "round_counter": 0,
+        })
+        return event["social_data"]
+
+    @staticmethod
+    def get_social_data(event) -> dict:
+        return SocialEventEngine.init_social_data(event)
+
+    @staticmethod
+    def create_round(event, round_name=None, participants=None) -> dict:
+        sd = SocialEventEngine.get_social_data(event)
+        sd["round_counter"] = sd.get("round_counter", 0) + 1
+        rn = round_name or f"Round {sd['round_counter']}"
+        rnd = {
+            "round_id":   f"sr_{sd['round_counter']}",
+            "round_name": rn,
+            "status":     "pending",
+            "participants": participants or [get_reg_name(r) for r in event.get("registrations", [])],
+            "results":    [],
+            "created_at": datetime.utcnow().isoformat(),
+            "completed_at": None,
+        }
+        sd["rounds"].append(rnd)
+        return rnd
+
+    @staticmethod
+    def get_active_round(event) -> dict | None:
+        sd = SocialEventEngine.get_social_data(event)
+        for rnd in reversed(sd.get("rounds", [])):
+            if rnd["status"] in ("pending", "live"):
+                return rnd
+        return None
+
+    @staticmethod
+    def get_last_completed_round(event) -> dict | None:
+        sd = SocialEventEngine.get_social_data(event)
+        for rnd in reversed(sd.get("rounds", [])):
+            if rnd["status"] == "completed":
+                return rnd
+        return None
+
+    @staticmethod
+    def record_round_results(event, round_id, results: list, recorded_by=None) -> dict:
+        """
+        results = [{"participant": "Name", "points": 5, "result": "1st/win/loss", "note": "..."}]
+        Returns: {"round": rnd, "leaderboard": {...}, "mvp_candidate": str|None}
+        """
+        sd  = SocialEventEngine.get_social_data(event)
+        rnd = next((r for r in sd["rounds"] if r["round_id"] == round_id), None)
+        if not rnd:
+            return {"error": "Round not found"}
+
+        scoring = sd.get("scoring_system", "points")
+        pw = sd.get("points_per_win", 3)
+        pd = sd.get("points_per_draw", 1)
+        pl = sd.get("points_per_loss", 0)
+
+        rnd["results"]      = results
+        rnd["status"]       = "completed"
+        rnd["completed_at"] = datetime.utcnow().isoformat()
+        if recorded_by:
+            rnd["recorded_by"] = str(recorded_by)
+
+        # Update leaderboard
+        lb = sd.setdefault("leaderboard", {})
+        for entry in results:
+            name   = entry.get("participant", "?")
+            pts    = entry.get("points", 0)
+            result = entry.get("result", "").lower()
+
+            # Auto-calc points if using win/loss system
+            if scoring == "win_loss":
+                if "win" in result or result in ("1st", "1", "first"):
+                    pts = pw
+                elif "draw" in result or result == "tie":
+                    pts = pd
+                else:
+                    pts = pl
+            elif scoring == "rank":
+                rank_map = {"1st":5, "1":5, "first":5, "2nd":3, "2":3, "second":3,
+                            "3rd":1, "3":1, "third":1}
+                pts = rank_map.get(result, 0)
+
+            if name not in lb:
+                lb[name] = {"total_points": 0, "rounds_played": 0,
+                            "wins": 0, "best_result": None, "round_scores": []}
+            lb[name]["total_points"]  += pts
+            lb[name]["rounds_played"] += 1
+            lb[name]["round_scores"].append(pts)
+            if result in ("1st", "1", "first", "win"):
+                lb[name]["wins"] = lb[name].get("wins", 0) + 1
+            if lb[name]["best_result"] is None or pts > lb[name]["best_result"]:
+                lb[name]["best_result"] = pts
+
+        # Store round in event match_results for unified history
+        event.setdefault("match_results", []).append({
+            "match_id":   round_id,
+            "type":       "social_round",
+            "round_name": rnd["round_name"],
+            "results":    results,
+            "recorded_at": rnd["completed_at"],
+        })
+
+        # Determine MVP candidate (highest points this round)
+        if results:
+            top = max(results, key=lambda x: x.get("points", 0))
+            mvp_candidate = top["participant"]
+        else:
+            mvp_candidate = None
+
+        return {
+            "round":         rnd,
+            "leaderboard":   lb,
+            "mvp_candidate": mvp_candidate,
+        }
+
+    @staticmethod
+    def get_sorted_leaderboard(event) -> list:
+        sd = SocialEventEngine.get_social_data(event)
+        lb = sd.get("leaderboard", {})
+        return sorted(
+            [{"name": k, **v} for k, v in lb.items()],
+            key=lambda x: (-x["total_points"], -x.get("wins", 0))
+        )
+
+    @staticmethod
+    def crown_mvp(event, mvp_name=None):
+        """Crown MVP — either specified or auto (highest points)."""
+        sd = SocialEventEngine.get_social_data(event)
+        if not mvp_name:
+            lb_sorted = SocialEventEngine.get_sorted_leaderboard(event)
+            if lb_sorted:
+                mvp_name = lb_sorted[0]["name"]
+        sd["mvp"] = mvp_name
+        event["champion"] = mvp_name
+        return mvp_name
+
+    @staticmethod
+    def log_moment(event, description, emoji=None):
+        """Log a special highlight moment."""
+        sd = SocialEventEngine.get_social_data(event)
+        if not emoji:
+            emoji = random.choice(HIGHLIGHT_EMOJIS)
+        sd.setdefault("moments", []).append({
+            "emoji":       emoji,
+            "description": description,
+            "timestamp":   datetime.utcnow().isoformat(),
+        })
+
+    @staticmethod
+    def random_spotlight(event) -> str | None:
+        """Randomly select one participant to spotlight."""
+        regs = event.get("registrations", [])
+        if not regs:
+            return None
+        return random.choice([get_reg_name(r) for r in regs])
+
+    @staticmethod
+    def sudden_death_pair(event):
+        """Pick the top 2 on leaderboard for a sudden death round."""
+        lb = SocialEventEngine.get_sorted_leaderboard(event)
+        if len(lb) < 2:
+            return None, None
+        return lb[0]["name"], lb[1]["name"]
+
+    @staticmethod
+    def chaos_shuffle(event) -> list:
+        """Randomly reshuffle all participants and return new pairs."""
+        regs = [get_reg_name(r) for r in event.get("registrations", [])]
+        random.shuffle(regs)
+        pairs = []
+        for i in range(0, len(regs) - 1, 2):
+            pairs.append((regs[i], regs[i+1]))
+        if len(regs) % 2 != 0:
+            pairs.append((regs[-1], "BYE"))
+        return pairs
+
+    @staticmethod
+    def lucky_draw(event) -> str | None:
+        """Random lucky participant — no logic, pure chaos."""
+        regs = event.get("registrations", [])
+        if not regs:
+            return None
+        return random.choice([get_reg_name(r) for r in regs])
+
+
+# ── Social Announcement Embeds ────────────────────────────────────────
+
+def build_social_round_start_embed(event, rnd) -> discord.Embed:
+    """Energetic round start announcement — mode-aware for MLBB."""
+    hype   = random.choice(ROUND_HYPE_LINES)
+    sd     = SocialEventEngine.get_social_data(event)
+    flavor = sd.get("flavor", "custom")
+    fl_label = SOCIAL_FLAVORS.get(flavor, "🎪 Event")
+    parts    = rnd.get("participants", [])
+
+    embed = discord.Embed(
+        title=f"🎪 {rnd['round_name'].upper()} — BEGIN!",
+        description=(
+            f"## {event['name']}  ·  {fl_label}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"*{hype}*"
+        ),
+        color=ROYAL_RED,
+        timestamp=datetime.utcnow()
+    )
+
+    # ── Mode-specific rules block ─────────────────────────────────────
+    if flavor == "hide_seek":
+        embed.add_field(
+            name="🙈 Hide & Seek Rules",
+            value=(
+                "🦸 **Hider:** Natalia — hide and **stay still**\n"
+                "👁️ **Seekers:** 3 players — wait 1 min in base\n"
+                "⏱️ **Time Limit:** 3 minutes\n"
+                "🏆 **Seekers win:** Find Natalia + emote\n"
+                "🏆 **Natalia wins:** Not found in time\n"
+                "❌ No skills · No attacks · No invisibility\n"
+                "❌ No jungle · Only Sprint/Arrival allowed\n"
+                "🔄 **Twist:** Winner becomes Natalia next round"
+            ),
+            inline=False
+        )
+        # Assign roles if participants listed
+        if len(parts) >= 4:
+            hider   = parts[0]
+            seekers = parts[1:4]
+            embed.add_field(name="🦸 Hider (Natalia)", value=f"**{hider}**",                         inline=True)
+            embed.add_field(name="👁️ Seekers",          value="\n".join(f"• {s}" for s in seekers), inline=True)
+        elif parts:
+            embed.add_field(name="👥 Participants",
+                value="\n".join(f"• {p}" for p in parts[:10]), inline=False)
+
+    elif flavor == "protect_layla":
+        embed.add_field(
+            name="🛡️ Protect Layla Rules",
+            value=(
+                "👑 **Defenders (3):** Protect Layla at all costs\n"
+                "⚔️ **Attackers (3):** Kill Layla to win\n"
+                "🏆 **Attackers win:** Layla dies\n"
+                "🏆 **Defenders win:** Layla survives the time limit\n"
+                "📋 *Mod announces time limit and Layla player*"
+            ),
+            inline=False
+        )
+        if len(parts) >= 2:
+            half = len(parts) // 2
+            defenders = parts[:half]
+            attackers = parts[half:]
+            embed.add_field(name="🛡️ Defenders",
+                value="\n".join(f"• {p}" for p in defenders), inline=True)
+            embed.add_field(name="⚔️ Attackers",
+                value="\n".join(f"• {p}" for p in attackers), inline=True)
+
+    elif flavor == "one_v_one":
+        embed.add_field(
+            name="🗡️ 1v1 Rules",
+            value=(
+                "⚔️ Custom room 1v1 in Mobile Legends\n"
+                "🏆 First to the agreed kill count wins\n"
+                "🦸 Heroes chosen freely\n"
+                "📋 *Mod confirms kill target before match starts*"
+            ),
+            inline=False
+        )
+        if len(parts) >= 2:
+            for i in range(0, min(len(parts), 20), 2):
+                p1 = parts[i]
+                p2 = parts[i+1] if i+1 < len(parts) else "BYE"
+                embed.add_field(name=f"⚔️ Match {i//2+1}",
+                    value=f"**{p1}** vs **{p2}**", inline=True)
+
+    elif flavor == "kill_race":
+        embed.add_field(
+            name="⚔️ Kill Race Rules",
+            value=(
+                "💀 All players in the same custom match\n"
+                "🏆 First to the agreed kill target wins\n"
+                "📋 Submit your final kill count to the mod"
+            ),
+            inline=False
+        )
+        if parts:
+            embed.add_field(name=f"👥 Fighters ({len(parts)})",
+                value="\n".join(f"⚔️ **{p}**" for p in parts[:10])
+                + ("..." if len(parts) > 10 else ""), inline=False)
+
+    else:
+        # Generic participants list for other modes
+        if parts:
+            fmt_txt = MLBB_EVENT_FORMATS.get(flavor, "")
+            if fmt_txt:
+                embed.add_field(name="📋 Format", value=fmt_txt[:512], inline=False)
+            lines = [f"⚔️ **{p}**" for p in parts[:20]]
+            embed.add_field(
+                name=f"👥 Participants ({len(parts)})",
+                value="\n".join(lines) + ("..." if len(parts) > 20 else ""),
+                inline=False
+            )
+
+    # Leaderboard teaser
+    lb = SocialEventEngine.get_sorted_leaderboard(event)
+    if lb:
+        leader = lb[0]
+        embed.add_field(
+            name="👑 Current Leader",
+            value=f"**{leader['name']}** — {leader['total_points']} pts",
+            inline=True
+        )
+
+    embed.set_footer(text=f"⚜️ {event['name']} | Majestic Dominion")
+    apply_branding(embed, thumbnail=True)
+    return embed
+
+
+def build_social_round_recap_embed(event, rnd, result_info) -> discord.Embed:
+    """Cinematic round result recap."""
+    hype = random.choice(RESULT_HYPE_LINES)
+    results = rnd.get("results", [])
+    mvp_c   = result_info.get("mvp_candidate")
+    lb      = SocialEventEngine.get_sorted_leaderboard(event)
+
+    # Find the round winner (highest points)
+    top_result = max(results, key=lambda x: x.get("points", 0)) if results else None
+
+    sd_r = SocialEventEngine.get_social_data(event)
+    sc   = sd_r.get("scoring_system","custom")
+    sc_icon = SCORING_SYSTEMS.get(sc,("💎","",""))[0]
+    flav = SOCIAL_FLAVORS.get(sd_r.get("flavor","custom"), "🎪")
+    embed = discord.Embed(
+        title=f"🏁 {rnd['round_name'].upper()} — COMPLETE!",
+        description=(
+            f"## {event['name']}  ·  {flav}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"*{hype}*"
+        ),
+        color=ROYAL_PURPLE,
+        timestamp=datetime.utcnow()
+    )
+
+    # Round results
+    if results:
+        sorted_results = sorted(results, key=lambda x: -x.get("points", 0))
+        medals = ["🥇", "🥈", "🥉"] + ["🏅"] * 50
+        lines  = []
+        for i, r in enumerate(sorted_results[:15]):
+            note = f" · *{r['note']}*" if r.get("note") else ""
+            score_val = r.get('result', str(r.get('points',0)))
+            lines.append(f"{medals[i]} **{r['participant']}** — {sc_icon} {score_val}{note}")
+        embed.add_field(
+            name=f"📊 Round Results",
+            value="\n".join(lines)[:1024],
+            inline=False
+        )
+
+    # Round star
+    if top_result:
+        embed.add_field(
+            name="⭐ Round Star",
+            value=f"**{top_result['participant']}** — {top_result.get('points',0)} pts",
+            inline=True
+        )
+
+    # Overall standings top 3
+    if lb:
+        top3 = lb[:3]
+        m    = ["🥇","🥈","🥉"]
+        stand = "\n".join(f"{m[i]} **{s['name']}** — {s['total_points']} pts total" for i,s in enumerate(top3))
+        embed.add_field(name="🏆 Overall Top 3", value=stand, inline=True)
+
+    # Total rounds played
+    sd = SocialEventEngine.get_social_data(event)
+    total_rounds = len([r for r in sd.get("rounds",[]) if r["status"]=="completed"])
+    embed.add_field(name="📈 Rounds Complete", value=str(total_rounds), inline=True)
+
+    embed.set_footer(text=f"⚜️ {event['name']} | Use /events → 📊 Leaderboard to follow along!")
+    apply_branding(embed, thumbnail=True)
+    return embed
+
+
+def build_social_leaderboard_embed(event) -> discord.Embed:
+    """Live social event leaderboard."""
+    lb    = SocialEventEngine.get_sorted_leaderboard(event)
+    sd    = SocialEventEngine.get_social_data(event)
+    total = len([r for r in sd.get("rounds",[]) if r["status"]=="completed"])
+    mvp   = sd.get("mvp")
+
+    sc_key  = sd.get("scoring_system","custom")
+    sc_info = SCORING_SYSTEMS.get(sc_key, ("💎","Points",""))
+    fl_key  = sd.get("flavor","custom")
+    fl_name = SOCIAL_FLAVORS.get(fl_key, "⚙️ Custom")
+    embed = discord.Embed(
+        title=f"📊 Live Leaderboard — {event['name']}",
+        description=(
+            f"{fl_name} · {sc_info[0]} **{sc_info[1]}** scoring\n"
+            f"After **{total}** round(s) · **{len(lb)}** participants on the board"
+        ),
+        color=ROYAL_GOLD,
+        timestamp=datetime.utcnow()
+    )
+
+    if not lb:
+        embed.description = "*No results recorded yet. Check back after the first round!*"
+    else:
+        medals = ["🥇","🥈","🥉"] + ["🏅"]*50
+        lines  = []
+        for i, s in enumerate(lb[:20]):
+            rp  = s.get("rounds_played",0)
+            avg = round(s["total_points"]/rp, 1) if rp else 0
+            mvp_badge = " 👑" if s["name"] == mvp else ""
+            lines.append(
+                f"{medals[i]} **{s['name']}**{mvp_badge} — "
+                f"**{s['total_points']} pts** · {rp} rounds · avg {avg}"
+            )
+        embed.description = "\n".join(lines)[:2048]
+
+    # Show moments if any
+    moments = sd.get("moments", [])[-4:]
+    if moments:
+        mlines = [f"{m['emoji']} *{m['description']}*" for m in moments]
+        embed.add_field(name="✨ Event Highlights", value="\n".join(mlines)[:1024], inline=False)
+
+    embed.set_footer(text=f"⚜️ Majestic Dominion | {event['name']}")
+    apply_branding(embed, thumbnail=True)
+    return embed
+
+
+def build_social_mvp_embed(event, mvp_name) -> discord.Embed:
+    """Grand MVP / winner announcement for social events."""
+    lb     = SocialEventEngine.get_sorted_leaderboard(event)
+    mvp_s  = next((s for s in lb if s["name"] == mvp_name), {})
+    total_pts = mvp_s.get("total_points", "?")
+    wins      = mvp_s.get("wins", 0)
+    rounds    = mvp_s.get("rounds_played", 0)
+
+    embed = discord.Embed(
+        title="🌟 MOST VALUABLE PLAYER!",
+        description=(
+            f"## ⭐ {mvp_name}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"*The Crown recognizes an exceptional performance.*\n\n"
+            f"🏆 **{event['name']}** — Event MVP\n\n"
+            f"💎 **{total_pts}** total points · "
+            f"🏅 **{wins}** round win(s) · "
+            f"⚔️ **{rounds}** rounds competed\n\n"
+            f"*Glory to the most dominant competitor in the Dominion!*"
+        ),
+        color=ROYAL_GOLD,
+        timestamp=datetime.utcnow()
+    )
+
+    # Top 3 podium
+    if lb:
+        podium = []
+        medals = ["🥇","🥈","🥉"]
+        for i, s in enumerate(lb[:3]):
+            podium.append(f"{medals[i]} **{s['name']}** — {s['total_points']} pts")
+        embed.add_field(name="🏆 Final Podium", value="\n".join(podium), inline=False)
+
+    # Event moments
+    sd = SocialEventEngine.get_social_data(event)
+    moments = sd.get("moments", [])
+    if moments:
+        mlines = [f"{m['emoji']} *{m['description']}*" for m in moments[-5:]]
+        embed.add_field(name="✨ Event Highlights", value="\n".join(mlines)[:1024], inline=False)
+
+    embed.set_footer(text=f"⚜️ Majestic Dominion | {event['name']} — Concluded")
+    apply_branding(embed, thumbnail=False, author=True)
+    return embed
+
+
+def build_social_spotlight_embed(event, name) -> discord.Embed:
+    """Random spotlight announcement."""
+    hype_lines = [
+        f"**{name}** steps into the spotlight — the Land of Dawn watches!",
+        f"The Oracle points to **{name}** — prove your worth!",
+        f"**{name}** is called to the arena — don't disappoint the crown!",
+        f"All eyes on **{name}** — the crowd holds its breath!",
+        f"**{name}** — your moment has come in the Land of Dawn!",
+        f"**{name}** is chosen — glory or humiliation awaits!",
+    ]
+    embed = discord.Embed(
+        title="🎯 RANDOM SPOTLIGHT!",
+        description=(
+            f"## ⭐ {name}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"*{random.choice(hype_lines)}*"
+        ),
+        color=ROYAL_RED,
+        timestamp=datetime.utcnow()
+    )
+    embed.set_footer(text=f"⚜️ {event['name']} | Majestic Dominion")
+    apply_branding(embed, thumbnail=True)
+    return embed
+
+
+def build_social_sudden_death_embed(event, p1, p2) -> discord.Embed:
+    sd = SocialEventEngine.get_social_data(event)
+    flavor = sd.get("flavor", "custom")
+    mode_hint = {
+        "hide_seek":     "One hides as Natalia, one seeks — loser drops on the leaderboard!",
+        "protect_layla": "1 defends Layla, 1 attacks — sudden death rules apply!",
+        "one_v_one":     "First kill wins — no second chances in sudden death!",
+        "kill_race":     "First to 1 kill wins — pure reaction speed!",
+    }.get(flavor, "One match decides it all — may the best player win!")
+
+    embed = discord.Embed(
+        title="⚡ SUDDEN DEATH!",
+        description=(
+            f"## {p1}  ⚡  {p2}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"*The top two warriors clash — only one survives!*\n\n"
+            f"📋 {mode_hint}\n\n"
+            f"*No mercy. No excuses. This is Mobile Legends.*"
+        ),
+        color=ROYAL_RED,
+        timestamp=datetime.utcnow()
+    )
+    embed.set_footer(text=f"⚜️ {event['name']} | Majestic Dominion")
+    apply_branding(embed, thumbnail=True)
+    return embed
+
+
+def build_social_chaos_embed(event, pairs) -> discord.Embed:
+    embed = discord.Embed(
+        title="🌀 CHAOS ROUND — RESHUFFLED!",
+        description=(
+            f"## {event['name']}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"*The Oracle has spoken — all pairings reshuffled!*\n\n"
+            f"*Nothing is safe. Everything is possible. Pure chaos begins NOW!*"
+        ),
+        color=0x9B59B6,
+        timestamp=datetime.utcnow()
+    )
+    if pairs:
+        lines = []
+        for p1, p2 in pairs[:15]:
+            if p2 == "BYE":
+                lines.append(f"🚪 **{p1}** — BYE")
+            else:
+                lines.append(f"⚡ **{p1}** vs **{p2}**")
+        embed.add_field(name="🎲 New Pairings", value="\n".join(lines)[:1024], inline=False)
+    embed.set_footer(text=f"⚜️ {event['name']} | Majestic Dominion")
+    apply_branding(embed, thumbnail=True)
+    return embed
+
+
+def build_social_moment_embed(event, emoji, description) -> discord.Embed:
+    embed = discord.Embed(
+        title=f"{emoji} EVENT HIGHLIGHT!",
+        description=f"## {event['name']}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n*{description}*",
+        color=ROYAL_GOLD,
+        timestamp=datetime.utcnow()
+    )
+    embed.set_footer(text=f"⚜️ {event['name']} | Majestic Dominion")
+    apply_branding(embed, thumbnail=True)
+    return embed
+
+
+# ── Social Event Manager Views (Mod Tools) ────────────────────────────
+
+class SocialEventManagerView(View):
+    """Full social event control panel for mods."""
+    def __init__(self, event, author_id):
+        super().__init__(timeout=300)
+        self.event     = event
+        self.author_id = author_id
+        sd = SocialEventEngine.get_social_data(event)
+        active = SocialEventEngine.get_active_round(event)
+        self.start_round_btn.disabled   = active is not None  # can't start new if one is active
+        self.record_round_btn.disabled  = active is None       # can't record if no active round
+        self.end_round_btn.disabled     = active is None
+        self.sudden_death_btn.disabled  = len(SocialEventEngine.get_sorted_leaderboard(event)) < 2
+        self.crown_mvp_btn.disabled     = not sd.get("leaderboard")
+
+    def _check(self, interaction):
+        return interaction.user.id == self.author_id
+
+    @discord.ui.button(label="▶️ Start New Round", style=discord.ButtonStyle.success, row=0)
+    async def start_round_btn(self, interaction, button):
+        if not self._check(interaction): return
+        await interaction.response.send_modal(StartSocialRoundModal(self.event, self.author_id))
+
+    @discord.ui.button(label="📝 Record Round", style=discord.ButtonStyle.danger, row=0)
+    async def record_round_btn(self, interaction, button):
+        if not self._check(interaction): return
+        active = SocialEventEngine.get_active_round(self.event)
+        if not active:
+            return await interaction.response.send_message("❌ No active round.", ephemeral=True)
+        await interaction.response.send_modal(
+            RecordSocialRoundModal(self.event, active, self.author_id))
+
+    @discord.ui.button(label="⏹️ Close Round", style=discord.ButtonStyle.secondary, row=0)
+    async def end_round_btn(self, interaction, button):
+        if not self._check(interaction): return
+        active = SocialEventEngine.get_active_round(self.event)
+        if not active:
+            return await interaction.response.send_message("❌ No active round.", ephemeral=True)
+        active["status"] = "completed"
+        active["completed_at"] = datetime.utcnow().isoformat()
+        save_data(squad_data)
+        embed = discord.Embed(title="⏹️ Round Closed",
+            description=f"**{active['round_name']}** closed without results.", color=ROYAL_RED)
+        apply_branding(embed, thumbnail=True)
+        await interaction.response.edit_message(embed=embed, view=SocialEventManagerView(self.event, self.author_id))
+
+    @discord.ui.button(label="🎯 Random Spotlight", style=discord.ButtonStyle.primary, row=1)
+    async def spotlight_btn(self, interaction, button):
+        if not self._check(interaction): return
+        name = SocialEventEngine.random_spotlight(self.event)
+        if not name:
+            return await interaction.response.send_message("❌ No registrations.", ephemeral=True)
+        SocialEventEngine.log_moment(self.event, f"{name} was put in the spotlight!", "🎯")
+        save_data(squad_data)
+        embed = build_social_spotlight_embed(self.event, name)
+        await interaction.response.edit_message(embed=embed, view=self)
+        await announce_event(interaction.guild, build_social_spotlight_embed(self.event, name))
+        await log_action(interaction.guild, "🎯 Spotlight",
+            f"{interaction.user.mention} spotlighted **{name}** in **{self.event['name']}**")
+
+    @discord.ui.button(label="⚡ Sudden Death", style=discord.ButtonStyle.danger, row=1)
+    async def sudden_death_btn(self, interaction, button):
+        if not self._check(interaction): return
+        p1, p2 = SocialEventEngine.sudden_death_pair(self.event)
+        if not p1:
+            return await interaction.response.send_message("❌ Need at least 2 on leaderboard.", ephemeral=True)
+        SocialEventEngine.log_moment(self.event, f"Sudden Death: {p1} vs {p2}!", "⚡")
+        save_data(squad_data)
+        embed = build_social_sudden_death_embed(self.event, p1, p2)
+        await interaction.response.edit_message(embed=embed, view=self)
+        await announce_event(interaction.guild, build_social_sudden_death_embed(self.event, p1, p2))
+        await log_action(interaction.guild, "⚡ Sudden Death",
+            f"{interaction.user.mention} called sudden death between **{p1}** vs **{p2}** in **{self.event['name']}**")
+
+    @discord.ui.button(label="🌀 Chaos Reshuffle", style=discord.ButtonStyle.primary, row=1)
+    async def chaos_btn(self, interaction, button):
+        if not self._check(interaction): return
+        pairs = SocialEventEngine.chaos_shuffle(self.event)
+        if not pairs:
+            return await interaction.response.send_message("❌ No registrations to shuffle.", ephemeral=True)
+        SocialEventEngine.log_moment(self.event, "All pairings reshuffled — pure chaos!", "🌀")
+        save_data(squad_data)
+        embed = build_social_chaos_embed(self.event, pairs)
+        await interaction.response.edit_message(embed=embed, view=self)
+        await announce_event(interaction.guild, build_social_chaos_embed(self.event, pairs))
+        await log_action(interaction.guild, "🌀 Chaos Shuffle",
+            f"{interaction.user.mention} chaos-reshuffled **{self.event['name']}**")
+
+    @discord.ui.button(label="🎰 Lucky Draw", style=discord.ButtonStyle.secondary, row=2)
+    async def lucky_btn(self, interaction, button):
+        if not self._check(interaction): return
+        name = SocialEventEngine.lucky_draw(self.event)
+        if not name:
+            return await interaction.response.send_message("❌ No registrations.", ephemeral=True)
+        # Give +1 bonus point
+        sd = SocialEventEngine.get_social_data(self.event)
+        lb = sd.setdefault("leaderboard", {})
+        lb.setdefault(name, {"total_points":0,"rounds_played":0,"wins":0,"round_scores":[]})
+        lb[name]["total_points"] += 1
+        SocialEventEngine.log_moment(self.event, f"{name} won the Lucky Draw — +1 bonus point! 🎰", "🎰")
+        save_data(squad_data)
+        embed = discord.Embed(
+            title="🎰 LUCKY DRAW!",
+            description=f"## 🍀 {name}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                        f"*Fortune smiles on the bold!*\n\n"
+                        f"**{name}** wins a **+1 bonus point** from the Lucky Draw!\n\n"
+                        f"*The Crown rewards those blessed by fate.*",
+            color=ROYAL_GOLD, timestamp=datetime.utcnow()
+        )
+        apply_branding(embed, thumbnail=True)
+        await interaction.response.edit_message(embed=embed, view=self)
+        await announce_event(interaction.guild, embed)
+        await log_action(interaction.guild, "🎰 Lucky Draw",
+            f"{interaction.user.mention} ran lucky draw — **{name}** +1 pt in **{self.event['name']}**")
+
+    @discord.ui.button(label="✨ Log Moment", style=discord.ButtonStyle.secondary, row=2)
+    async def moment_btn(self, interaction, button):
+        if not self._check(interaction): return
+        await interaction.response.send_modal(LogMomentModal(self.event, self.author_id))
+
+    @discord.ui.button(label="👑 Crown MVP", style=discord.ButtonStyle.success, row=2)
+    async def crown_mvp_btn(self, interaction, button):
+        if not self._check(interaction): return
+        await interaction.response.send_modal(CrownMVPModal(self.event, self.author_id))
+
+    @discord.ui.button(label="⚙️ Settings", style=discord.ButtonStyle.secondary, row=3)
+    async def settings_btn(self, interaction, button):
+        if not self._check(interaction): return
+        await interaction.response.send_modal(SocialSettingsModal(self.event, self.author_id))
+
+    @discord.ui.button(label="📊 Leaderboard", style=discord.ButtonStyle.secondary, row=3)
+    async def lb_btn(self, interaction, button):
+        if not self._check(interaction): return
+        embed = build_social_leaderboard_embed(self.event)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @discord.ui.button(label="🔄 Refresh", style=discord.ButtonStyle.secondary, row=3)
+    async def refresh_btn(self, interaction, button):
+        if not self._check(interaction): return
+        await interaction.response.edit_message(
+            embed=build_social_dashboard_embed(self.event),
+            view=SocialEventManagerView(self.event, self.author_id)
+        )
+
+
+def build_social_dashboard_embed(event) -> discord.Embed:
+    """Mod dashboard for social events."""
+    sd     = SocialEventEngine.get_social_data(event)
+    active = SocialEventEngine.get_active_round(event)
+    lb     = SocialEventEngine.get_sorted_leaderboard(event)
+    done_rounds = len([r for r in sd.get("rounds",[]) if r["status"]=="completed"])
+    flavor = SOCIAL_FLAVORS.get(sd.get("flavor","custom"), "🎪")
+    scoring = SCORING_SYSTEMS.get(sd.get("scoring_system","points"), ("💎","Points",""))[1]
+
+    fmt_hint = MLBB_EVENT_FORMATS.get(sd.get("flavor","custom"), "")
+    embed = discord.Embed(
+        title=f"🎪 MLBB Event Control — {event['name']}",
+        description=(
+            f"{flavor} · **{scoring}** scoring · "
+            f"**{len(event.get('registrations',[]))}** participants\n"
+            f"**{done_rounds}** round(s) complete · "
+            f"{'⚔️ **Round Active**' if active else '⏳ *No active round*'}"
+            + (f"\n📋 *{fmt_hint}*" if fmt_hint else "")
+        ),
+        color=ROYAL_PURPLE,
+        timestamp=datetime.utcnow()
+    )
+
+    if active:
+        embed.add_field(
+            name=f"⚔️ Active: {active['round_name']}",
+            value=f"**{len(active.get('participants',[]))}** participants · {active['status']}",
+            inline=False
+        )
+
+    if lb:
+        top3 = lb[:3]
+        m    = ["🥇","🥈","🥉"]
+        stand = "\n".join(f"{m[i]} **{s['name']}** — {s['total_points']} pts" for i,s in enumerate(top3))
+        embed.add_field(name="📊 Top 3", value=stand, inline=True)
+
+    moments = sd.get("moments",[])[-3:]
+    if moments:
+        mlines = [f"{m['emoji']} *{m['description'][:50]}*" for m in moments]
+        embed.add_field(name="✨ Recent Highlights", value="\n".join(mlines), inline=True)
+
+    embed.set_footer(text="⚜️ Majestic Dominion | Social Event Control Panel")
+    apply_branding(embed, thumbnail=True)
+    return embed
+
+
+# ── Modals for Social Event Management ───────────────────────────────
+
+class StartSocialRoundModal(Modal, title="▶️ Start New Round"):
+    round_name = TextInput(label="Round Name",
+        placeholder="e.g. Round 1, Elimination Round, Finals...",
+        required=True, max_length=50)
+    custom_participants = TextInput(
+        label="Participants (one per line, or leave blank for all)",
+        placeholder="Leave blank to include all registrants",
+        style=discord.TextStyle.paragraph, required=False, max_length=500)
+    def __init__(self, event, author_id):
+        super().__init__(); self.event = event; self.author_id = author_id
+
+    async def on_submit(self, interaction):
+        parts = None
+        if self.custom_participants.value.strip():
+            parts = [p.strip() for p in self.custom_participants.value.strip().split("\n") if p.strip()]
+        rnd = SocialEventEngine.create_round(self.event, self.round_name.value.strip(), parts)
+        rnd["status"] = "live"
+        save_data(squad_data)
+        embed = build_social_round_start_embed(self.event, rnd)
+        await interaction.response.edit_message(
+            embed=build_social_dashboard_embed(self.event),
+            view=SocialEventManagerView(self.event, self.author_id)
+        )
+        await announce_event(interaction.guild, embed)
+        await log_action(interaction.guild, "▶️ Round Started",
+            f"{interaction.user.mention} started **{rnd['round_name']}** in **{self.event['name']}**")
+
+
+class RecordSocialRoundModal(Modal, title="📝 Record Match Results"):
+    results_raw = TextInput(
+        label="Results — IGN: value  (one per line)",
+        placeholder=(
+            "Kills mode:   PlayerA: 18\nPlayerB: 12\n"
+            "Wins mode:    PlayerA: win\nPlayerB: loss\n"
+            "KDA mode:     PlayerA: 8.5\nPlayerB: 3.2\n"
+            "MVP Stars:    PlayerA: 3\nPlayerB: 2"
+        ),
+        style=discord.TextStyle.paragraph,
+        required=True, max_length=2000
+    )
+    def __init__(self, event, rnd, author_id):
+        super().__init__(); self.event = event; self.rnd = rnd; self.author_id = author_id
+
+    async def on_submit(self, interaction):
+        sd      = SocialEventEngine.get_social_data(self.event)
+        scoring = sd.get("scoring_system", "custom")
+        pw = sd.get("points_per_win", 3)
+        pd_pts = sd.get("points_per_draw", 1)
+        pl = sd.get("points_per_loss", 0)
+        results = []
+
+        for line in self.results_raw.value.strip().split("\n"):
+            line = line.strip()
+            if not line or ":" not in line:
+                continue
+            name, val = line.split(":", 1)
+            name = name.strip(); val = val.strip()
+
+            # ── MLBB-aware result parsing ──────────────────────────────
+            val_lower = val.lower()
+
+            if scoring == "wins":
+                # win/loss/draw text
+                if val_lower in ("win","w","1st","victory"):
+                    pts = pw; result_str = "Win"
+                elif val_lower in ("draw","tie"):
+                    pts = pd_pts; result_str = "Draw"
+                elif val_lower in ("loss","lose","l","defeat"):
+                    pts = pl; result_str = "Loss"
+                else:
+                    try: pts = int(val); result_str = f"{pts} wins"
+                    except: pts = 0; result_str = val
+
+            elif scoring == "kills":
+                # raw kill count becomes the score
+                try: pts = int(val); result_str = f"{pts} kills"
+                except: pts = 0; result_str = val
+
+            elif scoring == "kda":
+                # float KDA ratio
+                try:
+                    kda = float(val)
+                    pts = round(kda * 2)   # KDA 5.0 → 10pts, 2.5 → 5pts etc.
+                    result_str = f"KDA {kda}"
+                except: pts = 0; result_str = val
+
+            elif scoring == "mvp_stars":
+                # MLBB MVP stars: 1, 2, or 3 per match
+                try:
+                    stars = max(0, min(3, int(val)))
+                    pts   = stars
+                    result_str = f"{'⭐' * stars}"
+                except: pts = 0; result_str = val
+
+            elif scoring == "damage":
+                # raw damage number, scaled down for leaderboard
+                try:
+                    dmg = int(val.replace(",","").replace(".",""))
+                    pts = dmg // 1000   # 50000 damage → 50pts
+                    result_str = f"{dmg:,} dmg"
+                except: pts = 0; result_str = val
+
+            elif scoring == "rank":
+                # placement 1st-8th
+                rank_pts = {"1":5,"1st":5,"first":5,
+                            "2":3,"2nd":3,"second":3,
+                            "3":2,"3rd":2,"third":2,
+                            "4":1,"4th":1,"fourth":1}
+                pts = rank_pts.get(val_lower, 0)
+                result_str = f"#{val}"
+
+            else:
+                # custom: just take the number
+                try: pts = int(val); result_str = f"{pts} pts"
+                except: pts = 0; result_str = val
+
+            results.append({"participant": name, "points": pts,
+                            "result": result_str, "note": ""})
+
+        if not results:
+            return await interaction.response.send_message(
+                "❌ No valid results parsed.\n"
+                "Format: `IGN: value` one per line.\n"
+                "Examples: `PlayerA: win` · `PlayerA: 18` · `PlayerA: 8.5`",
+                ephemeral=True)
+
+        result_info = SocialEventEngine.record_round_results(
+            self.event, self.rnd["round_id"], results, interaction.user.id)
+        save_data(squad_data)
+
+        recap = build_social_round_recap_embed(self.event, self.rnd, result_info)
+        await interaction.response.edit_message(
+            embed=build_social_dashboard_embed(self.event),
+            view=SocialEventManagerView(self.event, self.author_id)
+        )
+        await announce_event(interaction.guild, recap)
+        await log_action(interaction.guild, "📝 Round Recorded",
+            f"{interaction.user.mention} recorded **{self.rnd['round_name']}** "
+            f"({len(results)} results) in **{self.event['name']}**")
+
+
+class LogMomentModal(Modal, title="✨ Log Event Highlight"):
+    emoji_input = TextInput(label="Emoji (optional)", placeholder="🔥 💥 ⚡ etc.",
+        required=False, max_length=5)
+    description = TextInput(label="What happened?",
+        placeholder="PlayerX pulled off an insane play!",
+        style=discord.TextStyle.paragraph, required=True, max_length=200)
+    def __init__(self, event, author_id):
+        super().__init__(); self.event = event; self.author_id = author_id
+
+    async def on_submit(self, interaction):
+        emoji = self.emoji_input.value.strip() or random.choice(HIGHLIGHT_EMOJIS)
+        desc  = self.description.value.strip()
+        SocialEventEngine.log_moment(self.event, desc, emoji)
+        save_data(squad_data)
+        moment_embed = build_social_moment_embed(self.event, emoji, desc)
+        await interaction.response.edit_message(
+            embed=build_social_dashboard_embed(self.event),
+            view=SocialEventManagerView(self.event, self.author_id)
+        )
+        await announce_event(interaction.guild, moment_embed)
+        await log_action(interaction.guild, "✨ Moment Logged",
+            f"{interaction.user.mention} logged highlight in **{self.event['name']}**: *{desc[:80]}*")
+
+
+class CrownMVPModal(Modal, title="👑 Crown Event MVP"):
+    mvp_name = TextInput(
+        label="MVP Name (leave blank for auto — highest pts)",
+        placeholder="Leave blank to auto-crown top leaderboard player",
+        required=False, max_length=80
+    )
+    def __init__(self, event, author_id):
+        super().__init__(); self.event = event; self.author_id = author_id
+
+    async def on_submit(self, interaction):
+        name = self.mvp_name.value.strip() or None
+        mvp  = SocialEventEngine.crown_mvp(self.event, name)
+        if not mvp:
+            return await interaction.response.send_message(
+                "❌ Could not determine MVP. Record some round results first.", ephemeral=True)
+        self.event["status"]   = "completed"
+        self.event["champion"] = mvp
+        save_data(squad_data)
+        mvp_embed = build_social_mvp_embed(self.event, mvp)
+        await interaction.response.edit_message(
+            embed=build_social_dashboard_embed(self.event),
+            view=SocialEventManagerView(self.event, self.author_id)
+        )
+        await announce_major(interaction.guild, mvp_embed)
+        await log_action(interaction.guild, "👑 MVP Crowned",
+            f"{interaction.user.mention} crowned **{mvp}** as MVP of **{self.event['name']}**")
+
+
+class SocialSettingsModal(Modal, title="⚙️ MLBB Event Settings"):
+    scoring = TextInput(
+        label="Scoring  (wins / kills / kda / mvp_stars / damage / rank / custom)",
+        placeholder="wins",
+        required=True, max_length=12)
+    pts_win  = TextInput(label="Points per Win  (wins mode only)",   default="3", required=True, max_length=3)
+    pts_draw = TextInput(label="Points per Draw (wins mode only)",   default="1", required=True, max_length=3)
+    pts_loss = TextInput(label="Points per Loss (wins mode only)",   default="0", required=True, max_length=3)
+    flavor   = TextInput(
+        label="Game Mode  (hide_seek / protect_layla / one_v_one / kill_race / brawl / all_random / hero_lock / magic_chess / kda_war / draft_pick / custom)",
+        placeholder="hide_seek",
+        required=False, max_length=15)
+    def __init__(self, event, author_id):
+        super().__init__(); self.event = event; self.author_id = author_id
+
+    async def on_submit(self, interaction):
+        sd = SocialEventEngine.get_social_data(self.event)
+        sc = self.scoring.value.strip().lower()
+        if sc not in SCORING_SYSTEMS:
+            valid = " / ".join(SCORING_SYSTEMS.keys())
+            return await interaction.response.send_message(
+                f"❌ Valid scoring systems: `{valid}`", ephemeral=True)
+        try:
+            pw = int(self.pts_win.value)
+            pd_v = int(self.pts_draw.value)
+            pl = int(self.pts_loss.value)
+        except:
+            return await interaction.response.send_message("❌ Points must be whole numbers.", ephemeral=True)
+        sd["scoring_system"]  = sc
+        sd["points_per_win"]  = pw
+        sd["points_per_draw"] = pd_v
+        sd["points_per_loss"] = pl
+        fl = self.flavor.value.strip().lower() if self.flavor.value else "custom"
+        if fl in SOCIAL_FLAVORS:
+            sd["flavor"] = fl
+        save_data(squad_data)
+        sys_info  = SCORING_SYSTEMS[sc]
+        flav_name = SOCIAL_FLAVORS.get(fl, "⚙️ Custom")
+        fmt_desc  = MLBB_EVENT_FORMATS.get(fl, "")
+        embed = discord.Embed(
+            title="⚙️ MLBB Event Settings Updated",
+            description=(
+                f"🎮 **Mode:** {flav_name}\n"
+                f"{sys_info[0]} **Scoring:** {sys_info[1]}\n"
+                f"*{sys_info[2]}*"
+                + (f"\n\n📋 *{fmt_desc}*" if fmt_desc else "")
+                + (f"\n\n**Win:** {pw}pts · **Draw:** {pd_v}pts · **Loss:** {pl}pts" if sc == "wins" else "")
+            ),
+            color=ROYAL_GREEN)
+        apply_branding(embed, thumbnail=True)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+# ── Public Social Event View ──────────────────────────────────────────
+
+class SocialEventDetailView(View):
+    """Public view for social events — leaderboard, rounds, highlights."""
+    def __init__(self, event, user_id):
+        super().__init__(timeout=180)
+        self.event   = event
+        self.user_id = user_id
+        already = is_registered(event, user_id)
+        is_open = event["status"] in ("open", "registration")
+        self.register_btn.disabled = already or not is_open
+        if already:
+            self.register_btn.label = "✅ Registered"
+            self.register_btn.style = discord.ButtonStyle.success
+        elif not is_open:
+            self.register_btn.label = f"🔒 {event['status'].upper()}"
+        self.cancel_btn.disabled = not already
+        sd = SocialEventEngine.get_social_data(event)
+        self.leaderboard_btn.disabled = not sd.get("leaderboard")
+        self.rounds_btn.disabled      = not sd.get("rounds")
+
+    @discord.ui.button(label="📝 Register",            style=discord.ButtonStyle.success, row=0)
+    async def register_btn(self, interaction, button):
+        await handle_registration(interaction, self.event)
+
+    @discord.ui.button(label="❌ Cancel Registration", style=discord.ButtonStyle.danger,   row=0)
+    async def cancel_btn(self, interaction, button):
+        await handle_cancel_registration(interaction, self.event)
+
+    @discord.ui.button(label="📊 Live Leaderboard",    style=discord.ButtonStyle.primary,  row=1)
+    async def leaderboard_btn(self, interaction, button):
+        embed = build_social_leaderboard_embed(self.event)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @discord.ui.button(label="📜 Round History",       style=discord.ButtonStyle.secondary, row=1)
+    async def rounds_btn(self, interaction, button):
+        sd = SocialEventEngine.get_social_data(self.event)
+        rounds = [r for r in sd.get("rounds",[]) if r["status"] == "completed"]
+        if not rounds:
+            return await interaction.response.send_message("*No rounds completed yet.*", ephemeral=True)
+        embed = discord.Embed(
+            title=f"📜 Round History — {self.event['name']}",
+            color=ROYAL_PURPLE,
+            timestamp=datetime.utcnow()
+        )
+        for rnd in rounds[-8:]:
+            results = sorted(rnd.get("results",[]), key=lambda x: -x.get("points",0))
+            if results:
+                top = results[0]
+                lines = [f"🥇 **{top['participant']}** — {top.get('points',0)} pts"]
+                for r in results[1:4]:
+                    lines.append(f"• {r['participant']} — {r.get('points',0)} pts")
+            else:
+                lines = ["*No results*"]
+            embed.add_field(name=f"⚔️ {rnd['round_name']}", value="\n".join(lines)[:512], inline=True)
+        apply_branding(embed, thumbnail=True)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @discord.ui.button(label="👥 Registrations",       style=discord.ButtonStyle.secondary, row=1)
+    async def regs_btn(self, interaction, button):
+        embed, _ = build_registrations_embed(self.event, 1, interaction.guild)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
 
 # =====================================================================
 #                         EVENTS SYSTEM  (Complete)
@@ -5621,6 +8260,14 @@ TOURNAMENT_SYSTEMS = {
 def get_all_events():
     if "events" not in squad_data:
         squad_data["events"] = []
+    # Ensure each event has match_results log
+    for ev in squad_data["events"]:
+        ev.setdefault("match_results", [])
+        ev.setdefault("champion", None)
+        ev.setdefault("settings", {"bo_format": "bo1", "auto_advance": True})
+        bd = ev.get("bracket_data")
+        if bd:
+            bd.setdefault("current_round", 0)
     return squad_data["events"]
 
 def get_event_by_id(eid):
@@ -5932,6 +8579,13 @@ def build_event_detail_embed(event, guild=None):
     status_colors = {"open": ROYAL_GREEN, "ongoing": ROYAL_PURPLE, "closed": 0x555555}
     status_labels = {"open": "🟢 OPEN — Registration Active", "ongoing": "⚔️ ONGOING", "closed": "🔴 CLOSED"}
     type_labels   = {"tournament": "🏆 Tournament", "fun": "🎉 Social Event", "social": "🎉 Social Event"}
+    # For social events, pull flavor from social_data
+    if event.get("type") == "fun":
+        sd = event.get("social_data", {})
+        flavor_key = sd.get("flavor", "custom")
+        flavor_label = SOCIAL_FLAVORS.get(flavor_key, "⚙️ Custom")
+        scoring_key  = sd.get("scoring_system", "points")
+        scoring_label = SCORING_SYSTEMS.get(scoring_key, ("💎","Points",""))[1]
     mode_labels   = {"solo": "👤 Solo", "small_team": "👥 Small Team", "squad_5v5": "👑 Squad 5v5"}
     reg_count = len(event.get("registrations", []))
     mx_str = f" / {event['max_entries']} max" if event.get("max_entries") else ""
@@ -6240,7 +8894,10 @@ class EventsListView(View):
         if not event:
             return await interaction.response.send_message("❌ Event not found.", ephemeral=True)
         embed = build_event_detail_embed(event, interaction.guild)
-        view = EventDetailView(event, interaction.user.id)
+        if event.get("type") == "fun":
+            view = SocialEventDetailView(event, interaction.user.id)
+        else:
+            view = EventDetailViewV2(event, interaction.user.id)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
     @discord.ui.button(label="◀ Prev", style=discord.ButtonStyle.secondary, row=1)
@@ -6482,7 +9139,7 @@ class EventManagerView(View):
         embed = discord.Embed(title="✏️ Edit Event", description="Select:", color=ROYAL_GOLD)
         apply_branding(embed, thumbnail=True)
         await interaction.response.send_message(embed=embed,
-            view=EventActionSelectView(evs, "edit", interaction.user.id), ephemeral=True)
+            view=EventActionSelectViewV2(evs, "edit", interaction.user.id), ephemeral=True)
 
     @discord.ui.button(label="Delete", emoji="🗑️", style=discord.ButtonStyle.danger, row=0)
     async def delete_btn(self, interaction, button):
@@ -6492,7 +9149,7 @@ class EventManagerView(View):
         embed = discord.Embed(title="🗑️ Delete Event", description="Select:", color=ROYAL_RED)
         apply_branding(embed, thumbnail=True)
         await interaction.response.send_message(embed=embed,
-            view=EventActionSelectView(evs, "delete", interaction.user.id), ephemeral=True)
+            view=EventActionSelectViewV2(evs, "delete", interaction.user.id), ephemeral=True)
 
     @discord.ui.button(label="Registrations", emoji="📋", style=discord.ButtonStyle.secondary, row=1)
     async def regs_btn(self, interaction, button):
@@ -6502,7 +9159,7 @@ class EventManagerView(View):
         embed = discord.Embed(title="📋 Registrations", description="Select:", color=ROYAL_PURPLE)
         apply_branding(embed, thumbnail=True)
         await interaction.response.send_message(embed=embed,
-            view=EventActionSelectView(evs, "regs", interaction.user.id), ephemeral=True)
+            view=EventActionSelectViewV2(evs, "regs", interaction.user.id), ephemeral=True)
 
     @discord.ui.button(label="Start", emoji="▶️", style=discord.ButtonStyle.success, row=1)
     async def start_btn(self, interaction, button):
@@ -6512,7 +9169,7 @@ class EventManagerView(View):
         embed = discord.Embed(title="▶️ Start Event", description="Select:", color=ROYAL_GREEN)
         apply_branding(embed, thumbnail=True)
         await interaction.response.send_message(embed=embed,
-            view=EventActionSelectView(evs, "start", interaction.user.id), ephemeral=True)
+            view=EventActionSelectViewV2(evs, "start", interaction.user.id), ephemeral=True)
 
     @discord.ui.button(label="Close", emoji="⏹️", style=discord.ButtonStyle.danger, row=1)
     async def close_btn(self, interaction, button):
@@ -6522,7 +9179,7 @@ class EventManagerView(View):
         embed = discord.Embed(title="⏹️ Close Event", description="Select:", color=ROYAL_RED)
         apply_branding(embed, thumbnail=True)
         await interaction.response.send_message(embed=embed,
-            view=EventActionSelectView(evs, "close", interaction.user.id), ephemeral=True)
+            view=EventActionSelectViewV2(evs, "close", interaction.user.id), ephemeral=True)
 
     @discord.ui.button(label="Randomize", emoji="🎲", style=discord.ButtonStyle.primary, row=2)
     async def random_btn(self, interaction, button):
@@ -6532,7 +9189,7 @@ class EventManagerView(View):
         embed = discord.Embed(title="🎲 Randomize", description="Select event:", color=ROYAL_PURPLE)
         apply_branding(embed, thumbnail=True)
         await interaction.response.send_message(embed=embed,
-            view=EventActionSelectView(evs, "randomize", interaction.user.id), ephemeral=True)
+            view=EventActionSelectViewV2(evs, "randomize", interaction.user.id), ephemeral=True)
 
     @discord.ui.button(label="Schedule Matches", emoji="📅", style=discord.ButtonStyle.secondary, row=2)
     async def schedule_btn(self, interaction, button):
@@ -6543,7 +9200,7 @@ class EventManagerView(View):
         embed = discord.Embed(title="📅 Schedule Matches", description="Select event:", color=ROYAL_GOLD)
         apply_branding(embed, thumbnail=True)
         await interaction.response.send_message(embed=embed,
-            view=EventActionSelectView(evs, "schedule", interaction.user.id), ephemeral=True)
+            view=EventActionSelectViewV2(evs, "schedule", interaction.user.id), ephemeral=True)
 
     @discord.ui.button(label="🔄 Refresh", style=discord.ButtonStyle.secondary, row=2)
     async def refresh_btn(self, interaction, button):
@@ -7310,8 +9967,7 @@ async def announce_new_event(guild, event):
     Announcements channel → @MAJESTIC ping + clean summary (name, description, format, reg, date, max, prize, how to register, check war-results).
     War-results channel   → full details embed, NO ping.
     """
-    ann_ch = (discord.utils.get(guild.text_channels, name=NEWS_CHANNEL_NAME)
-              or discord.utils.get(guild.text_channels, name=ANNOUNCE_CHANNEL_NAME))
+    ann_ch = discord.utils.get(guild.text_channels, name=NEWS_CHANNEL_NAME)
     war_ch = discord.utils.get(guild.text_channels, name=ANNOUNCE_CHANNEL_NAME)
 
     majestic_role = discord.utils.get(guild.roles, name=MAJESTIC_ROLE_NAME)
@@ -7369,7 +10025,7 @@ async def announce_new_event(guild, event):
             print(f"⚠️ Announcement channel error: {e}")
 
     # ── War-results channel: full details, NO ping ────────────────────
-    if war_ch and war_ch != ann_ch:
+    if war_ch:
         war_embed = discord.Embed(
             title=f"🎪 NEW EVENT — {event['name']}",
             description=event.get("description", ""),
@@ -7502,7 +10158,7 @@ async def events_command(interaction: discord.Interaction):
             value=f"{si} **{ev['status'].upper()}** | {mi} {fmt}{pp}\n📅 {ev['date']}\n👥 {rc}{mx} registered\n*{desc}*",
             inline=False)
     embed.set_footer(text=f"⚜️ Page 1/{total_pages} | Select an event below")
-    view = EventsListView(visible, page=0, author_id=interaction.user.id)
+    view = EventsListView(visible, page=0, author_id=interaction.user.id)  # detail uses EventDetailViewV2
     await interaction.response.send_message(embed=embed, view=view)
     await log_action(interaction.guild, "🎪 /events", f"{interaction.user.mention} opened the **Events Board**")
 
@@ -7511,6 +10167,7 @@ async def events_command(interaction: discord.Interaction):
 @bot.event
 async def on_ready():
     await bot.tree.sync()
+    setup_oracle(bot, oracle)
     safety_sync.start()
     if not weekly_digest_task.is_running():
         weekly_digest_task.start()
