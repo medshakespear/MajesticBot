@@ -1,4 +1,5 @@
 discord.py>=2.3.2
+openai
 google-generativeai
 google.genai
 aiohttp
