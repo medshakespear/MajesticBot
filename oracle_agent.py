@@ -85,7 +85,7 @@ except ImportError:
 ORACLE_CHANNEL_NAME = "『🔮』royal-oracle"
 MOD_ORACLE_CHANNEL  = "『🛡️』mod-oracle"
 
-GEMINI_MODEL  = "gemini-1.5-flash"        # free, fast, smart
+GEMINI_MODEL  = "gemini-2.0-flash"        # free, fast, smart
 GROQ_MODEL    = "llama-3.3-70b-versatile" # free, very capable fallback
 
 MAX_TOKENS          = 1024
