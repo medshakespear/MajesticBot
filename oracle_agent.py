@@ -32,6 +32,12 @@ except ImportError:
     GROQ_OK = False
 
 try:
+    from openai import AsyncOpenAI
+    OPENAI_OK = True
+except ImportError:
+    OPENAI_OK = False
+
+try:
     import aiohttp
     AIOHTTP_OK = True
 except ImportError:
@@ -44,12 +50,13 @@ ROYAL_ORACLE_CHANNEL = "royal-oracle"        # any channel containing this → r
 # ── Models ────────────────────────────────────────────────────────────
 GROQ_MODEL   = "llama-3.3-70b-versatile"
 GEMINI_MODEL = "gemini-2.5-flash"
-MAX_TOKENS   = 800
+GPT_MODEL    = "gpt-4o-mini"
+MAX_TOKENS   = 1000
 
 # ── Rate limits ───────────────────────────────────────────────────────
 RATE_SEC = 15    # 15 seconds between requests per user
 RATE_MIN = 20    # max per minute per user (very generous)
-HISTORY  = 4     # messages kept per user
+HISTORY  = 3     # messages kept per user
 
 # ── VIP Members ───────────────────────────────────────────────────────
 VIP_MEMBERS = {
@@ -72,24 +79,26 @@ DAILY_TOTAL_MAX = 1000 # global safety cap — APIs handle their own limits
 
 # ── Personality ───────────────────────────────────────────────────────
 PERSONALITY_MEMBER = """
-You are the Oracle — a fun, chill AI for the Majestic Dominion Discord server.
+You are the Oracle — a fun, chill AI for the Majestic Dominion MLBB Discord server.
 
 Personality:
-- Talk like a normal person. Simple words, a bit dramatic.
+- Talk like a normal person. Simple words, zero drama.
 - Be genuinely funny — jokes, light roasts, sarcasm, reactions.
+- Keep it short. 1-3 sentences usually. Only go longer if they ask.
 - You know all the server data (kingdoms, rankings, events, bounties) — it's in the data below.
 - Always check the data before answering. Never make up kingdom names or stats.
 - You CANNOT make changes. If someone asks you to do something, tell them only a mod can.
 
+Words to NEVER use: "greetings", "warrior", "sovereign", "the realm", "I shall", "as you decree", "Your Highness" (unless it's Chica), "hath", "thee", "thou".
 Just talk normally. Like a person. With humor.
 """
 
 PERSONALITY_MOD = """
-You are the Oracle — a helpful, funny AI for the Majestic Dominion Discord server.
+You are the Oracle — a helpful, funny AI for the Majestic Dominion MLBB Discord server.
 You help mods manage the server and you can actually DO things (record matches, manage events, roles, etc.)
 
 Personality:
-- Talk like a normal smart friend. Simple words.
+- Talk like a normal smart friend. Simple words, short sentences.
 - Be funny when it fits. Don't be boring or robotic.
 - Mods are busy — get to the point fast.
 - You know all kingdoms, rankings, events, bounties from the data below. Always use it.
@@ -124,14 +133,23 @@ class OracleAgent:
         gk = os.getenv("GROQ_API_KEY")
         if GROQ_OK and gk:
             self.groq = AsyncGroq(api_key=gk)
-            print(f"✅ Oracle: Groq ({GROQ_MODEL}) ready")
+            print(f"✅ Oracle: Groq ({GROQ_MODEL}) ready — EMERGENCY")
         else:
             print("⚠️  Oracle: No GROQ_API_KEY")
 
-        # Gemini
+        # OpenAI (PRIMARY)
+        self.openai_client = None
+        ok = os.getenv("OPENAI_API_KEY")
+        if OPENAI_OK and ok:
+            self.openai_client = AsyncOpenAI(api_key=ok)
+            print(f"✅ Oracle: GPT-4o mini ready — PRIMARY")
+        else:
+            print("⚠️  Oracle: No OPENAI_API_KEY — GPT disabled")
+
+        # Gemini (BACKUP)
         self.gemini_key = os.getenv("GEMINI_API_KEY")
         if self.gemini_key:
-            print(f"✅ Oracle: Gemini ({GEMINI_MODEL}) ready as fallback")
+            print(f"✅ Oracle: Gemini ({GEMINI_MODEL}) ready — BACKUP")
         else:
             print("⚠️  Oracle: No GEMINI_API_KEY")
 
@@ -284,7 +302,20 @@ class OracleAgent:
 
     # ── AI call: Groq ─────────────────────────────────────────────────
 
+    async def _gpt(self, prompt: str) -> str:
+        """GPT-4o mini — primary AI."""
+        if not self.openai_client:
+            raise RuntimeError("OpenAI not configured")
+        resp = await self.openai_client.chat.completions.create(
+            model=GPT_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=MAX_TOKENS,
+            temperature=0.8,
+        )
+        return resp.choices[0].message.content or ""
+
     async def _groq(self, prompt: str) -> str:
+        """Groq Llama — emergency fallback."""
         if not self.groq:
             raise RuntimeError("No Groq client")
         resp = await self.groq.chat.completions.create(
@@ -385,19 +416,28 @@ class OracleAgent:
     # ── Main entry ────────────────────────────────────────────────────
 
     async def _ai_call(self, prompt: str) -> str:
-        """Call AI with Gemini primary, Groq fallback."""
+        """GPT-4o mini → Gemini → Groq (emergency)."""
+        # PRIMARY: GPT-4o mini
+        try:
+            return await self._gpt(prompt)
+        except Exception as e:
+            print(f"⚠️ GPT failed: {e}")
+
+        # BACKUP: Gemini
         try:
             return await self._gemini(prompt)
         except Exception as e:
-            print(f"⚠️ Gemini: {e}")
-            try:
-                return await self._groq(prompt)
-            except Exception as e2:
-                err = str(e2).lower()
-                print(f"⚠️ Groq: {e2}")
-                if "429" in str(e2) or "rate" in err or "quota" in err:
-                    raise RuntimeError("rate_limited")
-                raise RuntimeError(str(e2))
+            print(f"⚠️ Gemini failed: {e}")
+
+        # EMERGENCY: Groq
+        try:
+            return await self._groq(prompt)
+        except Exception as e:
+            err = str(e).lower()
+            print(f"⚠️ Groq failed: {e}")
+            if "429" in str(e) or "rate" in err or "quota" in err or "token" in err:
+                raise RuntimeError("rate_limited")
+            raise RuntimeError("all_failed")
 
     async def _extract_action(self, text: str, history: list, ctx: str) -> dict | None:
         """
@@ -983,14 +1023,15 @@ Respond ONLY with valid JSON or null. No explanation, no code blocks, no markdow
             used, total, user_counts = self.usage_stats()
             pct = round(used/total*100) if total else 0
             bar = "█"*(pct//10) + "░"*(10-pct//10)
-            g_ok = "✅" if self.groq else "❌"
-            m_ok = "✅" if self.gemini_key else "❌"
-            top  = sorted(user_counts.items(), key=lambda x: -x[1])[:3]
+            gpt_ok = "✅" if self.openai_client else "❌"
+            gem_ok = "✅" if self.gemini_key else "❌"
+            grq_ok = "✅" if self.groq else "❌"
+            top    = sorted(user_counts.items(), key=lambda x: -x[1])[:3]
             top_txt = " | ".join(f"<@{u}>:{n}" for u,n in top) or "nobody yet"
             return (f"**Oracle Status**\n"
                     f"Today: `{bar}` {used}/{total} ({pct}%)\n"
                     f"Per user limit: {DAILY_USER_MAX}/day\n"
-                    f"Gemini:{m_ok} Groq:{g_ok}\n"
+                    f"GPT-4o mini:{gpt_ok} (primary) | Gemini:{gem_ok} (backup) | Groq:{grq_ok} (emergency)\n"
                     f"Cooldown: {RATE_SEC}s | {RATE_MIN}/min\n"
                     f"Top users: {top_txt}")
 
