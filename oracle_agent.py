@@ -39,7 +39,7 @@ except ImportError:
 
 # ── Channels ──────────────────────────────────────────────────────────
 MOD_ORACLE_CHANNEL   = "mod-oracle"    # any channel containing this → full mod access
-ROYAL_ORACLE_CHANNEL = "oracle"        # any channel containing this → read-only
+ROYAL_ORACLE_CHANNEL = "royal-oracle"        # any channel containing this → read-only
 
 # ── Models ────────────────────────────────────────────────────────────
 GROQ_MODEL   = "llama-3.3-70b-versatile"
