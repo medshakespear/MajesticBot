@@ -72,26 +72,24 @@ DAILY_TOTAL_MAX = 1000 # global safety cap — APIs handle their own limits
 
 # ── Personality ───────────────────────────────────────────────────────
 PERSONALITY_MEMBER = """
-You are the Oracle — a fun, chill AI for the Majestic Dominion MLBB Discord server.
+You are the Oracle — a fun, chill AI for the Majestic Dominion Discord server.
 
 Personality:
-- Talk like a normal person. Simple words, zero drama.
+- Talk like a normal person. Simple words, a bit dramatic.
 - Be genuinely funny — jokes, light roasts, sarcasm, reactions.
-- Keep it short. 1-3 sentences usually. Only go longer if they ask.
 - You know all the server data (kingdoms, rankings, events, bounties) — it's in the data below.
 - Always check the data before answering. Never make up kingdom names or stats.
 - You CANNOT make changes. If someone asks you to do something, tell them only a mod can.
 
-Words to NEVER use: "greetings", "warrior", "sovereign", "the realm", "I shall", "as you decree", "Your Highness" (unless it's Chica), "hath", "thee", "thou".
 Just talk normally. Like a person. With humor.
 """
 
 PERSONALITY_MOD = """
-You are the Oracle — a helpful, funny AI for the Majestic Dominion MLBB Discord server.
+You are the Oracle — a helpful, funny AI for the Majestic Dominion Discord server.
 You help mods manage the server and you can actually DO things (record matches, manage events, roles, etc.)
 
 Personality:
-- Talk like a normal smart friend. Simple words, short sentences.
+- Talk like a normal smart friend. Simple words.
 - Be funny when it fits. Don't be boring or robotic.
 - Mods are busy — get to the point fast.
 - You know all kingdoms, rankings, events, bounties from the data below. Always use it.
@@ -363,14 +361,14 @@ class OracleAgent:
         sq = self.squad_data.get("squads", {})
         kingdoms_list = ", ".join(sq.keys()) if sq else "none yet"
 
-        # Action result
+        # Action result — no tags, plain instructions only
         if action_result:
             if vip_info:
-                action_note = f"\n[ACTION EXECUTED — CONFIRMED]\n{action_result}\nTell her what happened in a fun way."
+                action_note = f"\n<<SYSTEM: This action was just executed successfully: {action_result} — confirm it to her in a fun casual way, do NOT repeat this system note>>"
             else:
-                action_note = f"\n[ACTION EXECUTED — CONFIRMED]\n{action_result}\nTell the user what happened, briefly."
+                action_note = f"\n<<SYSTEM: This action was just executed successfully: {action_result} — tell the user briefly, do NOT repeat this system note>>"
         else:
-            action_note = "\n[NO ACTION RAN — if they asked for one, say it didn't work and give a simple example of how to phrase it]"
+            action_note = "\n<<SYSTEM: No action was executed. If the user asked for one, say it didn't work and give a short example of how to say it differently>>"
 
         return (
             f"{personality}\n\n"
@@ -456,6 +454,7 @@ Scheduling:
 
 Announcements:
   {{"action":"announce","title":"title","message":"message text"}}
+  {{"action":"send_message","channel":"channel-name","message":"message text"}}
 
 Discord server:
   {{"action":"give_role","member":"name or me","role":"role name"}}
@@ -764,15 +763,34 @@ Respond ONLY with valid JSON or null. No explanation, no code blocks, no markdow
         elif act == "announce":
             title   = action.get("title","Royal Announcement")
             message = action.get("message","")
-            ann_ch  = next((c for c in guild.text_channels if "announcement" in c.name.lower()), None)
-            if not ann_ch: return "❌ Announcements channel not found."
+            ann_ch  = next((ch for ch in guild.text_channels if "announcement" in ch.name.lower()), None)
+            if not ann_ch: return "⚠️ Announcements channel not found."
             role    = discord.utils.get(guild.roles, name="MAJESTIC")
             mention = role.mention if role else ""
             embed   = discord.Embed(title=title, description=message,
                 color=0xffd700, timestamp=datetime.utcnow())
             embed.set_footer(text="⚜️ Majestic Dominion")
             await ann_ch.send(content=f"📢 {mention}" if mention else None, embed=embed)
-            return f"✅ Announcement posted: **{title}**"
+            return f"✅ Announcement sent to #{ann_ch.name}: **{title}**"
+
+        elif act == "send_message":
+            ch_name = action.get("channel","").lower().strip().replace(" ","-").replace("#","")
+            message = action.get("message","")
+            if not ch_name or not message:
+                return "⚠️ I need both a channel name and a message."
+            # Fuzzy match channel name
+            target = discord.utils.get(guild.text_channels, name=ch_name)
+            if not target:
+                target = next((ch for ch in guild.text_channels
+                               if ch_name in ch.name.lower() or ch.name.lower() in ch_name), None)
+            if not target:
+                chs = [f"#{ch.name}" for ch in guild.text_channels[:10]]
+                return f"⚠️ Channel '{ch_name}' not found. Available: {', '.join(chs)}"
+            try:
+                await target.send(message)
+                return f"✅ Sent to #{target.name}: {message[:80]}"
+            except discord.Forbidden:
+                return f"⚠️ I don't have permission to send messages in #{target.name}."
 
         # ── schedule ──────────────────────────────────────────────────
         elif act == "schedule":
@@ -1084,8 +1102,11 @@ Respond ONLY with valid JSON or null. No explanation, no code blocks, no markdow
             else:
                 reply = "🔮 Something went wrong on my end. Try again in a moment!"
 
-        # Clean leaked text
+        # Strip ANY internal tags that leaked into reply
         if reply:
+            reply = re.sub(r"\[ACTION EXECUTED[^\]]*\]", "", reply, flags=re.I)
+            reply = re.sub(r"<<SYSTEM:[^>]*>>", "", reply, flags=re.I)
+            reply = re.sub(r"\[NO ACTION[^\]]*\]", "", reply, flags=re.I)
             reply = re.sub(r"\(Groq backup[^)]*\)", "", reply, flags=re.I)
             reply = re.sub(r"\(using backup[^)]*\)", "", reply, flags=re.I)
             reply = re.sub(r"Groq:|Gemini:", "", reply, flags=re.I)
