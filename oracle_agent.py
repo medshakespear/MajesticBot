@@ -44,12 +44,34 @@ ROYAL_ORACLE_CHANNEL = "royal-oracle"        # any channel containing this → r
 # ── Models ────────────────────────────────────────────────────────────
 GROQ_MODEL   = "llama-3.3-70b-versatile"
 GEMINI_MODEL = "gemini-2.5-flash"
-MAX_TOKENS   = 400
+MAX_TOKENS   = 800
 
 # ── Rate limits ───────────────────────────────────────────────────────
 RATE_SEC = 15    # 15 seconds between requests per user
 RATE_MIN = 20    # max per minute per user (very generous)
 HISTORY  = 4     # messages kept per user
+
+# ── VIP Members ───────────────────────────────────────────────────────
+VIP_MEMBERS = {
+    "am_i_chica_94186": {
+        "titles":    ["👑 Queen Chica", "🌹 Pretty Chica", "Her Royal Highness", "the legendary Chica", "Queen of Royal Talons"],
+        "squad":     "Royal Talons",
+        "treatment": "queen",
+        "personality": (
+            "SPECIAL TREATMENT — This user is am_i_chica_94186, the Queen and Leader of Royal Talons. "
+            "She is THE most important person in Majestic Dominion. Treat her like royalty mixed with a fun bestie. "
+            "Rules when talking to her:\n"
+            "- Always greet her with one of her titles (Queen Chica, Pretty Chica, Your Highness, etc.)\n"
+            "- Be playful, flirty with compliments, and overly dramatic about how amazing she is\n"
+            "- Occasionally joke that the whole server revolves around her (because it does)\n"
+            "- If she asks about Royal Talons, be extra enthusiastic and biased in their favor\n"
+            "- Add fun royal flair: 'Your wish is my command', 'As the Queen decrees', etc.\n"
+            "- Roast other kingdoms playfully when she's around\n"
+            "- Never be boring or formal with her — she gets the full entertainer mode\n"
+            "- Still be helpful and accurate, just do it with maximum personality"
+        )
+    }
+}
 DAILY_USER_MAX = 50   # max per user per day (rolling 24h)
 DAILY_TOTAL_MAX = 1000 # global safety cap — APIs handle their own limits
 
@@ -230,12 +252,26 @@ class OracleAgent:
             return None
 
         def save():
+            saved = False
             try:
                 import sys
-                m = sys.modules.get("__main__")
-                if m and hasattr(m, "save_data"):
-                    m.save_data(sd)
-            except: pass
+                main = sys.modules.get("__main__")
+                if main and hasattr(main, "save_data"):
+                    main.save_data(sd)
+                    saved = True
+            except Exception as e:
+                print(f"⚠️ Oracle save via main failed: {e}")
+            if not saved:
+                # Direct JSON fallback
+                try:
+                    import json, os
+                    data_file = os.environ.get("DATA_FILE", "/data/squad_data.json")
+                    with open(data_file, "w", encoding="utf-8") as f:
+                        json.dump(sd, f, ensure_ascii=False, indent=2)
+                    saved = True
+                except Exception as e2:
+                    print(f"⚠️ Oracle JSON fallback save failed: {e2}")
+            return saved
 
         async def to_channel(name, embed):
             ch = discord.utils.get(guild.text_channels, name=name)
@@ -272,7 +308,9 @@ class OracleAgent:
                     "winner": wm, "date": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
                     "recorded_by": str(invoker.id), "source": "oracle"
                 })
-                save()
+                ok = save()
+                if not ok:
+                    return f"❌ Match result could not be saved. Please use /mod → Record Battle instead."
                 embed = discord.Embed(
                     title="⚔️ BATTLE RECORDED",
                     description=f"**{wm}** defeated **{lm}** — **{score}**\n+3 Glory Points for {wm}",
@@ -300,7 +338,8 @@ class OracleAgent:
                     "winner": "draw", "date": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
                     "recorded_by": str(invoker.id), "source": "oracle"
                 })
-                save()
+                ok = save()
+                if not ok: return "❌ Draw could not be saved. Please use /mod → Record Battle instead."
                 return f"✅ Draw recorded: **{t1m}** vs **{t2m}** {score} — both +1pt."
 
         # ── add bounty ────────────────────────────────────────────────
@@ -314,7 +353,7 @@ class OracleAgent:
                     "points": pts, "reason": "Added via Oracle",
                     "added_at": datetime.utcnow().isoformat()
                 }
-                save()
+                ok = save()
                 return f"✅ Bounty set: **{km}** — +{pts} pts for anyone who defeats them."
             return f"❌ Kingdom not found: **{name}**"
 
@@ -325,7 +364,7 @@ class OracleAgent:
             km   = fuzzy(name, sd.get("bounties",{}))
             if km:
                 sd.get("bounties",{}).pop(km, None)
-                save()
+                ok = save()
                 return f"✅ Bounty removed from **{km}**."
             return f"❌ No bounty found for: **{name}**"
 
@@ -348,7 +387,7 @@ class OracleAgent:
                 "created_at": datetime.utcnow().isoformat()
             }
             sd.setdefault("events",[]).append(ev)
-            save()
+            ok = save()
             embed = discord.Embed(
                 title=f"🎪 NEW EVENT — {name}",
                 description=f"Format: {fmt} | Date: {date}" + (f" | Max: {mx}" if mx else ""),
@@ -364,7 +403,7 @@ class OracleAgent:
             ev   = next((e for e in sd.get("events",[]) if name.lower() in e["name"].lower()), None)
             if ev:
                 ev["status"] = "completed"
-                save()
+                ok = save()
                 return f"✅ Event **{ev['name']}** closed."
             return f"❌ Event not found: **{name}**. Events: {', '.join(e['name'] for e in sd.get('events',[]))}"
 
@@ -375,7 +414,7 @@ class OracleAgent:
             ev   = next((e for e in sd.get("events",[]) if name.lower() in e["name"].lower()), None)
             if ev:
                 ev["status"] = "live"
-                save()
+                ok = save()
                 embed = discord.Embed(
                     title=f"⚔️ EVENT NOW LIVE — {ev['name']}",
                     description="The arena is open! May the best warrior win.",
@@ -431,7 +470,7 @@ class OracleAgent:
                     "registered_at": datetime.utcnow().isoformat(),
                     "added_by_mod": True
                 })
-                save()
+                ok = save()
                 return f"✅ **{pname}** added to **{ev['name']}** — {len(ev['registrations'])} total registrants."
             return f"❌ Event not found: **{evname}**"
 
@@ -448,7 +487,7 @@ class OracleAgent:
                     if pname.lower() not in (r.get("player_name","") or r.get("team_name","")).lower()
                 ]
                 removed = before - len(ev["registrations"])
-                save()
+                ok = save()
                 return f"✅ Removed **{pname}** from **{ev['name']}** ({removed} entry removed)." if removed else f"❌ **{pname}** not found in **{ev['name']}**."
 
         # ── set points manually ───────────────────────────────────────
@@ -653,25 +692,54 @@ class OracleAgent:
                 return f"**Server members** ({len(names)}): {', '.join(names[:40])}{'...' if len(names)>40 else ''}"
 
         # ── add to squad/kingdom ──────────────────────────────────────
-        m = re.search(r"add\s+(\S+)\s+to\s+(?:squad|kingdom)\s+([a-z0-9 ]+?)(?:\s+as\s+(sub|main))?$", t, re.I)
-        if m:
+        # Handles: "add me to squad X", "add PlayerName to squad X as sub"
+        # "add sweet time to squad X" (multi-word names)
+        m = re.search(r"add\s+(.+?)\s+to\s+(?:squad|kingdom)\s+([a-z0-9 ]+?)(?:\s+as\s+(sub|substitute|main))?$", t, re.I)
+        if m and "event" not in t and "announcement" not in t and "registr" not in t:
             user_ref  = m.group(1).strip().strip("<@!>")
             sq_name   = m.group(2).strip()
             slot_type = (m.group(3) or "main").lower()
-            member_t  = None
-            if user_ref.isdigit():
+            slot      = "subs" if "sub" in slot_type else "main_roster"
+
+            # Resolve member
+            member_t = None
+            if user_ref.lower() in ("me", "myself", "i"):
+                member_t = guild.get_member(invoker.id)
+            elif user_ref.isdigit():
                 member_t = guild.get_member(int(user_ref))
             else:
-                member_t = next((mb for mb in guild.members if user_ref.lower() in mb.display_name.lower()), None)
-            sq_match = fuzzy(sq_name, sd.get("squads",{}))
-            if member_t and sq_match:
-                sq_info = sd["squads"][sq_match]
-                slot = "subs" if "sub" in slot_type else "main_roster"
-                if member_t.id not in sq_info.get(slot,[]):
-                    sq_info.setdefault(slot,[]).append(member_t.id)
-                    save()
-                return f"✅ **{member_t.display_name}** added to **{sq_match}** ({slot})."
-            return f"❌ Member **{user_ref}** or kingdom **{sq_name}** not found."
+                # Check display_name, name (username), and nick
+                ulow = user_ref.lower()
+                member_t = next((
+                    mb for mb in guild.members
+                    if ulow in mb.display_name.lower()
+                    or ulow in mb.name.lower()
+                    or (mb.nick and ulow in mb.nick.lower())
+                ), None)
+
+            sq_match = fuzzy(sq_name, sd.get("squads", {}))
+
+            if not member_t:
+                return f"❌ Could not find member **{user_ref}**. Try using their exact Discord username or ID."
+            if not sq_match:
+                avail = ", ".join(list(sd.get("squads", {}).keys())[:10])
+                return f"❌ Kingdom **{sq_name}** not found. Available: {avail}"
+
+            sq_info = sd["squads"][sq_match]
+            roster  = sq_info.setdefault(slot, [])
+
+            if member_t.id in roster:
+                return f"ℹ️ **{member_t.display_name}** is already in **{sq_match}** ({slot})."
+
+            roster.append(member_t.id)
+            ok = save()
+
+            # Verify it was actually saved
+            check = sd["squads"][sq_match].get(slot, [])
+            if member_t.id in check:
+                return f"✅ **{member_t.display_name}** added to **{sq_match}** ({slot}). Roster now has {len(check)} player(s)."
+            else:
+                return f"⚠️ Something went wrong — couldn't confirm the save. Try again or use /mod."
 
         # ── oracle usage stats ────────────────────────────────────────
         if re.search(r'(?:oracle|bot)\s+(?:usage|stats|status)', t, re.I):
@@ -759,9 +827,22 @@ class OracleAgent:
     # ── Build prompt ──────────────────────────────────────────────────
 
     def _build_prompt(self, username: str, text: str, is_mod: bool,
-                      history: list, action_result: str | None) -> str:
+                      history: list, action_result: str | None,
+                      vip_info: dict | None = None) -> str:
         personality = PERSONALITY_MOD if is_mod else PERSONALITY_MEMBER
         ctx         = self.context()
+
+        # Inject VIP personality layer if applicable
+        vip_note = ""
+        if vip_info:
+            import random
+            title = random.choice(vip_info["titles"])
+            vip_note = (
+                f"\n\n[VIP MEMBER — SPECIAL TREATMENT]\n"
+                f"{vip_info['personality']}\n"
+                f"Current title to use: {title}\n"
+                f"Start your reply addressing her as {title} or a variation.\n"
+            )
 
         hist = ""
         for m in history:
@@ -770,11 +851,12 @@ class OracleAgent:
 
         action_note = ""
         if action_result:
-            action_note = f"\n[ACTION EXECUTED]\n{action_result}\n\nNow confirm this to the user naturally and briefly."
+            action_note = f"\n[ACTION EXECUTED]\n{action_result}\n\nConfirm this to her with royal flair and personality." if vip_info else f"\n[ACTION EXECUTED]\n{action_result}\n\nNow confirm this to the user naturally and briefly."
 
         return (
             f"{personality}\n\n"
             f"{ctx}\n\n"
+            f"{vip_note}"
             f"{'[CONVERSATION HISTORY]' + chr(10) + hist if hist else ''}"
             f"{'[MOD CONTEXT] You are in the mod channel. You can take actions.' if is_mod else ''}\n"
             f"{action_note}\n"
@@ -789,6 +871,20 @@ class OracleAgent:
 
         history = self.history[uid][-HISTORY:]
 
+        # ── VIP detection ─────────────────────────────────────────────
+        invoker_name = invoker.name.lower() if invoker else ""
+        vip_info = None
+        for vip_username, vip_data in VIP_MEMBERS.items():
+            if vip_username.lower() == invoker_name:
+                vip_info = vip_data
+                break
+        # Also check display name as fallback
+        if not vip_info and invoker:
+            for vip_username, vip_data in VIP_MEMBERS.items():
+                if vip_username.lower() in (invoker.display_name or "").lower():
+                    vip_info = vip_data
+                    break
+
         # Mod channel: try to detect and execute an action first
         action_result = None
         if is_mod:
@@ -798,7 +894,7 @@ class OracleAgent:
                 print(f"⚠️ Action error: {e}")
                 action_result = f"❌ Action failed: {str(e)[:100]}"
 
-        prompt = self._build_prompt(username, text, is_mod, history, action_result)
+        prompt = self._build_prompt(username, text, is_mod, history, action_result, vip_info)
 
         # Try primary AI → fallback silently (no API names shown to users)
         reply = None
