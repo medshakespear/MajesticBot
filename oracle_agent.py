@@ -50,7 +50,7 @@ ROYAL_ORACLE_CHANNEL = "royal-oracle"        # any channel containing this → r
 # ── Models ────────────────────────────────────────────────────────────
 GROQ_MODEL   = "llama-3.3-70b-versatile"
 GEMINI_MODEL = "gemini-2.0-flash"
-MISTRAL_MODEL = "mistral-small-latest"  # free tier
+MISTRAL_MODEL = "ministral-3b-latest" # free tier
 MAX_TOKENS   = 800
 
 # ── Rate limits ───────────────────────────────────────────────────────
