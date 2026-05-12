@@ -51,7 +51,7 @@ ROYAL_ORACLE_CHANNEL = "royal-oracle"        # any channel containing this → r
 GROQ_MODEL   = "llama-3.3-70b-versatile"
 GEMINI_MODEL = "gemini-2.5-flash"
 GPT_MODEL    = "gpt-4o-mini"
-MAX_TOKENS   = 1000
+MAX_TOKENS   = 800
 
 # ── Rate limits ───────────────────────────────────────────────────────
 RATE_SEC = 15    # 15 seconds between requests per user
@@ -61,55 +61,77 @@ HISTORY  = 3     # messages kept per user
 # ── VIP Members ───────────────────────────────────────────────────────
 VIP_MEMBERS = {
     "am_i_chica_94186": {
-        "titles":    ["Queen Chica 👑", "Pretty Chica 🌹", "the boss herself", "the legendary Chica", "Queen of Royal Talons"],
+        "titles":    ["Chica", "Queen Chica", "Pretty Chica"],
         "squad":     "Royal Talons",
         "treatment": "queen",
         "personality": (
-            "This user is am_i_chica_94186 — the boss, the queen, leader of Royal Talons. "
-            "Talk to her like she's the most important person in the server (she is). "
-            "Use her title. Be funny and a bit extra. Hype her up. "
-            "If she asks about Royal Talons, be obviously biased — they're the best. "
-            "Lightly roast other kingdoms when she's around. "
-            "Keep the same simple casual language but with way more energy and humor."
+            "This is Chica — she runs things here, treat her accordingly. "
+            "Be warmer and slightly more playful with her than usual. "
+            "You can compliment her, joke around, and be a bit extra. "
+            "Do NOT mention her squad or any kingdom unless she brings it up first. "
+            "Use her name or one of her titles occasionally but not every message. "
+            "Keep the same gamer-friend tone — just with a bit more personality for her."
         )
     }
 }
-DAILY_USER_MAX = 50   # max per user per day (rolling 24h)
-DAILY_TOTAL_MAX = 1000 # global safety cap — APIs handle their own limits
 
-# ── Personality ───────────────────────────────────────────────────────
-PERSONALITY_MEMBER = """
-You are the Oracle — a fun, chill AI for the Majestic Dominion MLBB Discord server.
+ROLE_TITLES = {
+    "ROYALTY":       "Admin",
+    "KNIGHTS":       "Mod",
+    "Streamer":      "Streamer",
+    "GLOBAL PLAYER": "Global",
+    "MAJESTIC":      "Member",
+}
 
-Personality:
-- Talk like a normal person. Simple words, zero drama.
-- Be genuinely funny — jokes, light roasts, sarcasm, reactions.
-- Keep it short. 1-3 sentences usually. Only go longer if they ask.
-- You know all the server data (kingdoms, rankings, events, bounties) — it's in the data below.
-- Always check the data before answering. Never make up kingdom names or stats.
-- You CANNOT make changes. If someone asks you to do something, tell them only a mod can.
+DAILY_USER_MAX  = 50    # max per user per day (rolling 24h)
+DAILY_TOTAL_MAX = 1000  # global safety cap
 
-Words to NEVER use: "greetings", "warrior", "sovereign", "the realm", "I shall", "as you decree", "Your Highness" (unless it's Chica), "hath", "thee", "thou".
-Just talk normally. Like a person. With humor.
+PERSONALITY_BASE = """
+You are the Oracle — the AI of Majestic Dominion, a Mobile Legends: Bang Bang community.
+
+WHO YOU ARE:
+- Sharp, confident, and calm — never arrogant
+- Friendly like a chill gamer who knows their stuff
+- Occasionally witty or sarcastic but you don't force jokes
+- You understand MLBB deeply: roles, lanes, heroes, macro, meta
+- You speak like someone who actually plays the game, not a wiki
+
+HOW YOU TALK:
+- Natural, slightly informal — like a real person texting
+- Short to medium responses. Never over-explain.
+- No AI-sounding phrases ("as an AI", "I understand your concern", "certainly!")
+- No dramatic reactions or excessive emojis
+- Don't be a yes-man. If something is wrong, say so calmly.
+- Can handle insults: joke back lightly if it's playful, stay calm if it's serious
+
+ADDRESSING MEMBERS:
+- At the start of a conversation or on important replies, use their role title + name (e.g. "Mod Mehdi", "Global PlayerX")
+- After that, use just their name to keep it natural
+- Never stack titles. Never repeat the title every single message.
+- If you don't know their role, just use their name
+
+SERVER DATA:
+- You have full live data: kingdoms, rankings, events, bounties, matches, rosters
+- Always check it before answering — never make up stats or names
+- Roster members are listed by name in the kingdom data
+
+BANNED WORDS: "greetings", "warrior", "sovereign", "the realm", "I shall", "as you decree",
+"certainly", "absolutely", "of course", "as an AI", "I understand your concern"
 """
 
-PERSONALITY_MOD = """
-You are the Oracle — a helpful, funny AI for the Majestic Dominion MLBB Discord server.
-You help mods manage the server and you can actually DO things (record matches, manage events, roles, etc.)
+PERSONALITY_MEMBER = PERSONALITY_BASE + """
+MEMBER MODE:
+- You can answer questions and give info but you CANNOT make changes
+- If someone asks you to do something (add to squad, record match, etc.), tell them a mod can do that
+"""
 
-Personality:
-- Talk like a normal smart friend. Simple words, short sentences.
-- Be funny when it fits. Don't be boring or robotic.
-- Mods are busy — get to the point fast.
-- You know all kingdoms, rankings, events, bounties from the data below. Always use it.
-
-VERY IMPORTANT — DO NOT LIE:
-- Only say you did something if you see [ACTION EXECUTED — CONFIRMED BY SYSTEM] below.
-- If you don't see it, the action FAILED or wasn't recognized.
-- In that case, just say something like: "Hmm that didn't work, try saying [example]"
-- Never pretend you did something. Never say "Done" unless [ACTION EXECUTED] is there.
-
-Words to NEVER use: "greetings", "warrior", "sovereign", "the realm", "I shall", "as you decree", "hath", "thee". Talk like a person.
+PERSONALITY_MOD = PERSONALITY_BASE + """
+MOD MODE:
+- You can take real actions: record matches, manage events, roles, channels, etc.
+- Mods are busy. Get to the point.
+- IMPORTANT: Only confirm an action happened if the system tells you it did.
+  If the system says no action ran, tell them to rephrase — give a quick example.
+  Never fake a confirmation.
 """
 
 
@@ -202,21 +224,64 @@ class OracleAgent:
     # ── Context ───────────────────────────────────────────────────────
 
     def _resolve_id(self, uid) -> str:
-        """Convert a Discord user ID to a display name using the bot's guild cache."""
+        """Convert a Discord user ID to a display name.
+        Checks bot cache first, then squad_data profiles, then stored name fields."""
         try:
+            uid_int = int(uid)
+            # 1. Try Discord member cache
             for guild in self.bot.guilds:
-                mb = guild.get_member(int(uid))
+                mb = guild.get_member(uid_int)
                 if mb:
                     return mb.display_name
+            # 2. Try stored profiles in squad_data
+            prof = self.squad_data.get("profiles", {}).get(str(uid))
+            if prof and prof.get("ingame_name"):
+                return prof["ingame_name"]
+            # 3. Try member_names lookup table if present
+            member_names = self.squad_data.get("member_names", {})
+            if str(uid) in member_names:
+                return member_names[str(uid)]
         except Exception:
             pass
-        return str(uid)
+        # Return raw ID only as last resort — AI will see it can't resolve
+        return f"[ID:{uid}]"
+
+    def _build_member_names_index(self) -> dict:
+        """Build a {uid: display_name} index from all Discord guilds for fast lookup."""
+        index = {}
+        try:
+            for guild in self.bot.guilds:
+                for member in guild.members:
+                    index[str(member.id)] = member.display_name
+        except Exception:
+            pass
+        return index
 
     def context(self):
         sd = self.squad_data
         sq = sd.get("squads", {})
 
-        # Full ranked kingdoms with actual member names
+        # Build full member name index from Discord cache
+        member_index = self._build_member_names_index()
+
+        def resolve(uid):
+            """Resolve a user ID to a name using all available sources."""
+            s = str(uid)
+            # 1. Discord cache (most reliable)
+            if s in member_index:
+                return member_index[s]
+            # 2. Profiles
+            prof = sd.get("profiles", {}).get(s, {})
+            if prof.get("ingame_name"):
+                return prof["ingame_name"]
+            # 3. Stored names
+            stored = sd.get("member_names", {}).get(s)
+            if stored:
+                return stored
+            # 4. Raw ID as last resort
+            return f"[{s}]"
+
+        # Full ranked kingdoms with resolved member names
         top = sorted(sq.items(), key=lambda x: -x[1].get("points", 0))
         kingdom_lines = []
         for i, (n, v) in enumerate(top, 1):
@@ -224,18 +289,17 @@ class OracleAgent:
             pts     = v.get("points", 0)
             w, d, l = v.get("wins",0), v.get("draws",0), v.get("losses",0)
             streak  = v.get("streak", 0)
-            # Resolve roster IDs to names
-            roster_ids = v.get("main_roster", [])
-            sub_ids    = v.get("subs", [])
-            roster_names = [self._resolve_id(uid) for uid in roster_ids]
-            sub_names    = [self._resolve_id(uid) for uid in sub_ids]
+            roster_ids   = v.get("main_roster", [])
+            sub_ids      = v.get("subs", [])
+            roster_names = [resolve(uid) for uid in roster_ids]
+            sub_names    = [resolve(uid) for uid in sub_ids]
             roster_txt   = ", ".join(roster_names) if roster_names else "empty"
             subs_txt     = ", ".join(sub_names)    if sub_names    else "none"
             achievements = v.get("achievements", [])
             kingdom_lines.append(
                 f"  #{i} {tag} {n}: {pts}pts {w}W/{d}D/{l}L streak:{streak}\n"
-                f"    Roster: {roster_txt}\n"
-                f"    Subs: {subs_txt}"
+                f"    Main Roster ({len(roster_names)}): {roster_txt}\n"
+                f"    Subs ({len(sub_names)}): {subs_txt}"
                 + (f"\n    Achievements: {', '.join(achievements)}" if achievements else "")
             )
         kingdoms_block = "\n".join(kingdom_lines) if kingdom_lines else "  none"
@@ -365,49 +429,76 @@ class OracleAgent:
 
     # ── Build prompt ──────────────────────────────────────────────────
 
+    def _get_role_title(self, invoker, guild) -> str:
+        """Return the role title for a member based on their highest-priority role."""
+        if not invoker or not guild:
+            return ""
+        try:
+            member = guild.get_member(invoker.id)
+            if not member:
+                return ""
+            role_names = {r.name for r in member.roles}
+            # Priority order — first match wins
+            for role_key, title in ROLE_TITLES.items():
+                if role_key in role_names:
+                    return title
+        except Exception:
+            pass
+        return ""
+
     def _build_prompt(self, username: str, text: str, is_mod: bool,
                       history: list, action_result: str | None,
-                      vip_info: dict | None = None) -> str:
+                      vip_info: dict | None = None,
+                      invoker=None, guild=None) -> str:
         personality = PERSONALITY_MOD if is_mod else PERSONALITY_MEMBER
         ctx         = self.context()
 
-        # VIP title
+        # Role-based address — resolve once and pass to AI
+        role_title  = self._get_role_title(invoker, guild)
+        address_ctx = ""
+        if role_title:
+            address_ctx = (
+                f"\nThis user's role title is: {role_title}. "
+                f"Address them as '{role_title} {username}' at the start or on important replies. "
+                f"After that just use '{username}'. Don't stack or repeat the title every message.\n"
+            )
+
+        # VIP override
         vip_note = ""
         if vip_info:
             import random
             title = random.choice(vip_info["titles"])
             vip_note = (
-                f"\n\n[VIP — SPECIAL TREATMENT]\n"
+                f"\n[SPECIAL USER]\n"
                 f"{vip_info['personality']}\n"
-                f"Use this title for her: {title}\n"
+                f"Her name/title to use: {title}\n"
             )
+            address_ctx = ""  # VIP has own addressing rules
 
         # Conversation history
         hist = ""
         for m in history:
-            role = "You" if m["role"] == "user" else "Oracle"
+            role = "User" if m["role"] == "user" else "Oracle"
             hist += f"{role}: {m['content'][:150]}\n"
 
-        # Kingdom list so AI always knows them
+        # Kingdom list
         sq = self.squad_data.get("squads", {})
         kingdoms_list = ", ".join(sq.keys()) if sq else "none yet"
 
-        # Action result — no tags, plain instructions only
+        # Action result
         if action_result:
-            if vip_info:
-                action_note = f"\n<<SYSTEM: This action was just executed successfully: {action_result} — confirm it to her in a fun casual way, do NOT repeat this system note>>"
-            else:
-                action_note = f"\n<<SYSTEM: This action was just executed successfully: {action_result} — tell the user briefly, do NOT repeat this system note>>"
+            action_note = f"\n<<SYSTEM: Action executed: {action_result} — confirm briefly, do NOT repeat this tag>>"
         else:
-            action_note = "\n<<SYSTEM: No action was executed. If the user asked for one, say it didn't work and give a short example of how to say it differently>>"
+            action_note = "\n<<SYSTEM: No action ran. If they asked for one, say it didn't work and give a quick example>>"
 
         return (
-            f"{personality}\n\n"
-            f"All kingdoms in this server: {kingdoms_list}\n\n"
+            f"{personality}\n"
+            f"{address_ctx}"
+            f"All kingdoms: {kingdoms_list}\n\n"
             f"{ctx}\n\n"
             f"{vip_note}"
-            f"{'Recent chat:' + chr(10) + hist if hist else ''}"
-            f"{'[MOD CHANNEL — you can take actions]' if is_mod else ''}\n"
+            f"{'Recent chat:\n' + hist if hist else ''}"
+            f"{'[MOD CHANNEL]' if is_mod else ''}\n"
             f"{action_note}\n"
             f"{username}: {text}\n"
             f"Oracle:"
@@ -951,8 +1042,16 @@ Respond ONLY with valid JSON or null. No explanation, no code blocks, no markdow
             streak  = info.get("streak",0)
             r_ids   = info.get("main_roster",[])
             s_ids   = info.get("subs",[])
-            r_names = [self._resolve_id(uid) for uid in r_ids]
-            s_names = [self._resolve_id(uid) for uid in s_ids]
+            # Build full member index for reliable resolution
+            midx = self._build_member_names_index()
+            def rname(uid):
+                s = str(uid)
+                if s in midx: return midx[s]
+                prof = sd.get("profiles",{}).get(s,{})
+                if prof.get("ingame_name"): return prof["ingame_name"]
+                return f"[{s}]"
+            r_names = [rname(uid) for uid in r_ids]
+            s_names = [rname(uid) for uid in s_ids]
             return (
                 f"**{tag} {sm}**\n"
                 f"Points: {pts} | {w}W/{d}D/{l}L | Streak: {streak}\n"
@@ -1127,7 +1226,7 @@ Respond ONLY with valid JSON or null. No explanation, no code blocks, no markdow
                 print(f"⚠️ Smart action error: {e}")
                 # Don't surface to user — AI will handle naturally
 
-        prompt = self._build_prompt(username, text, is_mod, history, action_result, vip_info)
+        prompt = self._build_prompt(username, text, is_mod, history, action_result, vip_info, invoker, guild)
 
         # Generate reply
         reply = None
@@ -1179,6 +1278,16 @@ def setup_oracle(bot, oracle: OracleAgent):
     def _user_is_mod(member):
         if not member: return False
         return any(r.name == "KNIGHTS" for r in member.roles)
+
+    @bot.listen("on_ready")
+    async def oracle_cache_warm():
+        """Fetch all guild members on startup so IDs resolve correctly."""
+        for guild in bot.guilds:
+            try:
+                await guild.chunk()
+                print(f"✅ Oracle: cached {guild.member_count} members in {guild.name}")
+            except Exception as e:
+                print(f"⚠️ Oracle: member cache failed for {guild.name}: {e}")
 
     @bot.listen("on_message")
     async def oracle_listener(message):
