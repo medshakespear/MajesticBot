@@ -45,11 +45,11 @@ except ImportError:
 
 # ── Channels ──────────────────────────────────────────────────────────
 MOD_ORACLE_CHANNEL   = "mod-oracle"    # any channel containing this → full mod access
-ROYAL_ORACLE_CHANNEL = "oracle"        # any channel containing this → read-only
+ROYAL_ORACLE_CHANNEL = "royal-oracle"        # any channel containing this → read-only
 
 # ── Models ────────────────────────────────────────────────────────────
 GROQ_MODEL   = "llama-3.3-70b-versatile"
-GEMINI_MODEL = "gemini-1.5-flash"
+GEMINI_MODEL = "gemini-2.0-flash"
 MISTRAL_MODEL = "mistral-small-latest"  # free tier
 MAX_TOKENS   = 800
 
@@ -64,7 +64,7 @@ VIP_MEMBERS = {
         "titles": [
             "the boss", "your highness", "the one and only",
             "the legend herself", "our beloved queen", "the CEO of this server",
-            "the most dangerous player here", "the one who signs the checks"
+           "Pretty Chica", "the one who signs the checks"
         ],
         "personality": """
 SPECIAL USER — This is the owner of Majestic Dominion. She runs everything.
