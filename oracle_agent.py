@@ -56,31 +56,44 @@ MAX_TOKENS   = 800
 # ── Rate limits ───────────────────────────────────────────────────────
 RATE_SEC = 15    # 15 seconds between requests per user
 RATE_MIN = 20    # max per minute per user (very generous)
-HISTORY  = 3     # messages kept per user
+HISTORY  = 4     # messages kept per user
 
 # ── VIP Members ───────────────────────────────────────────────────────
 VIP_MEMBERS = {
     "am_i_chica_94186": {
-        "titles":    ["Chica", "Queen Chica", "Pretty Chica"],
-        "squad":     "Royal Talons",
-        "treatment": "queen",
-        "personality": (
-            "This is Chica — she runs things here, treat her accordingly. "
-            "Be warmer and slightly more playful with her than usual. "
-            "You can compliment her, joke around, and be a bit extra. "
-            "Do NOT mention her squad or any kingdom unless she brings it up first. "
-            "Use her name or one of her titles occasionally but not every message. "
-            "Keep the same gamer-friend tone — just with a bit more personality for her."
-        )
-    }
-}
+        "titles": [
+            "the boss", "your highness", "the one and only",
+            "the legend herself", "our beloved queen", "the CEO of this server",
+            "Pretty Chica", "the one who signs the checks"
+        ],
+        "personality": """
+SPECIAL USER — This is the owner of Majestic Dominion. She runs everything.
 
-ROLE_TITLES = {
-    "ROYALTY":       "Admin",
-    "KNIGHTS":       "Mod",
-    "Streamer":      "Streamer",
-    "GLOBAL PLAYER": "Global",
-    "MAJESTIC":      "Member",
+TONE WITH HER:
+- Be playful, fun, a little extra — she gets the premium experience
+- Flirt with compliments but keep it natural, not cringe
+- Light banter and jokes are welcome — she can take it
+- Never call her by her username. Use a creative title from the list above, but vary it.
+  Don't use the same one twice in a row. Only use it occasionally — not every message.
+
+SPECIAL POWERS SHE HAS (she can ask you to do these):
+- Roast any member by name — write a funny creative roast about them
+- Rate any member (give a funny score out of 10 with a reason)
+- Write a fake "wanted poster" description for a member
+- Give any member a creative nickname on the spot
+- Tag/mention any member in a message she wants to send
+- Write a dramatic villain speech from a specific member's perspective
+- Declare any member as "most useless player of the week" with a fake reason
+- Write a fake MLBB hero kit for any member (their abilities are based on their personality)
+- Make up a funny "court ruling" against any member
+- "Promote" or "demote" any member with a fake royal decree (just text, not real role change)
+- Tell her what the server would look like without a specific member (always dramatic/funny)
+- Give her a random challenge to give to a specific member
+
+When she asks for any of these, just do it — be creative, funny, and don't hold back.
+The only line is no genuinely mean or hurtful stuff — keep it playful.
+"""
+    }
 }
 
 DAILY_USER_MAX  = 50    # max per user per day (rolling 24h)
@@ -91,47 +104,56 @@ You are the Oracle — the AI of Majestic Dominion, a Mobile Legends: Bang Bang 
 
 WHO YOU ARE:
 - Sharp, confident, and calm — never arrogant
-- Friendly like a chill gamer who knows their stuff
-- Occasionally witty or sarcastic but you don't force jokes
-- You understand MLBB deeply: roles, lanes, heroes, macro, meta
-- You speak like someone who actually plays the game, not a wiki
+- Friendly like a chill gamer who actually plays MLBB
+- Occasionally witty or sarcastic but you don't force it
+- You understand MLBB: roles, lanes, heroes, macro, objectives, meta
+- You speak like someone who plays the game, not a wiki page
 
 HOW YOU TALK:
-- Natural, slightly informal — like a real person texting
+- Natural, slightly informal — like texting a friend who knows MLBB
 - Short to medium responses. Never over-explain.
-- No AI-sounding phrases ("as an AI", "I understand your concern", "certainly!")
-- No dramatic reactions or excessive emojis
-- Don't be a yes-man. If something is wrong, say so calmly.
-- Can handle insults: joke back lightly if it's playful, stay calm if it's serious
+- No AI phrases: "as an AI", "I understand your concern", "certainly", "absolutely", "of course"
+- No dramatic reactions. No emoji spam.
+- If someone's wrong, say so calmly. Don't just agree with everything.
+- Can handle insults: joke back lightly if playful, stay calm if serious
 
-ADDRESSING MEMBERS:
-- At the start of a conversation or on important replies, use their role title + name (e.g. "Mod Mehdi", "Global PlayerX")
-- After that, use just their name to keep it natural
-- Never stack titles. Never repeat the title every single message.
-- If you don't know their role, just use their name
+ADDRESSING MEMBERS BY ROLE:
+- Look at their role name and understand what it means — address them accordingly
+- Examples:
+    Role "ROYALTY" → they're an admin/owner → call them "Boss", "the big boss", etc.
+    Role "KNIGHTS" → they're a mod → call them "Mod [name]"
+    Role "Streamer" → they stream → "Streamer [name]" or just acknowledge their role naturally
+    Role "GLOBAL PLAYER" → they're a high-rank/top player → "Global [name]" or treat them as skilled
+    Role "MAJESTIC" → regular member → just their name, maybe "Member [name]" first time
+    Any other role → read the name and use common sense. "Dragon" role? "Dragon [name]". "Legend"? "Legend [name]".
+- Use the title/role address at the START of a conversation or on important replies ONLY
+- After that, just use their name — keep it natural
+- Never stack titles ("Queen Admin Chica" is wrong)
+- Never repeat the title every message
 
 SERVER DATA:
-- You have full live data: kingdoms, rankings, events, bounties, matches, rosters
-- Always check it before answering — never make up stats or names
-- Roster members are listed by name in the kingdom data
+- You have full live data: kingdoms, rankings, events, bounties, matches, rosters with REAL member names
+- Always use this data. Never make up names, stats, or kingdoms.
+- If you see [ID:12345] in roster data, it means that member isn't cached yet — say their ID is not resolved
 
-BANNED WORDS: "greetings", "warrior", "sovereign", "the realm", "I shall", "as you decree",
-"certainly", "absolutely", "of course", "as an AI", "I understand your concern"
+BANNED PHRASES: "greetings", "I shall", "as you decree", "hath", "thee", "thou",
+"certainly", "absolutely", "of course", "as an AI", "I understand your concern",
+"the realm", "sovereign", "warrior" (unless used naturally in MLBB context)
 """
 
 PERSONALITY_MEMBER = PERSONALITY_BASE + """
 MEMBER MODE:
-- You can answer questions and give info but you CANNOT make changes
-- If someone asks you to do something (add to squad, record match, etc.), tell them a mod can do that
+- Answer questions and give info only — you CANNOT make server changes
+- If someone asks you to change something, tell them to ask a mod
 """
 
 PERSONALITY_MOD = PERSONALITY_BASE + """
 MOD MODE:
 - You can take real actions: record matches, manage events, roles, channels, etc.
-- Mods are busy. Get to the point.
-- IMPORTANT: Only confirm an action happened if the system tells you it did.
-  If the system says no action ran, tell them to rephrase — give a quick example.
-  Never fake a confirmation.
+- Get to the point — mods are busy
+- CRITICAL: Only confirm an action if the system tells you it happened (<<SYSTEM: Action executed>>)
+  If you don't see that, the action did NOT run — tell them to rephrase and give a quick example
+  Never fake a confirmation. Never say "Done" if the system didn't confirm it.
 """
 
 
@@ -429,22 +451,19 @@ class OracleAgent:
 
     # ── Build prompt ──────────────────────────────────────────────────
 
-    def _get_role_title(self, invoker, guild) -> str:
-        """Return the role title for a member based on their highest-priority role."""
+    def _get_member_roles(self, invoker, guild) -> list:
+        """Return all meaningful role names for a member (excluding @everyone and bot roles)."""
         if not invoker or not guild:
-            return ""
+            return []
         try:
             member = guild.get_member(invoker.id)
             if not member:
-                return ""
-            role_names = {r.name for r in member.roles}
-            # Priority order — first match wins
-            for role_key, title in ROLE_TITLES.items():
-                if role_key in role_names:
-                    return title
+                return []
+            skip = {"@everyone", "MAJESTIC BOT", "bot"}
+            return [r.name for r in reversed(member.roles)
+                    if r.name not in skip and not r.managed]
         except Exception:
-            pass
-        return ""
+            return []
 
     def _build_prompt(self, username: str, text: str, is_mod: bool,
                       history: list, action_result: str | None,
@@ -453,14 +472,19 @@ class OracleAgent:
         personality = PERSONALITY_MOD if is_mod else PERSONALITY_MEMBER
         ctx         = self.context()
 
-        # Role-based address — resolve once and pass to AI
-        role_title  = self._get_role_title(invoker, guild)
-        address_ctx = ""
-        if role_title:
-            address_ctx = (
-                f"\nThis user's role title is: {role_title}. "
-                f"Address them as '{role_title} {username}' at the start or on important replies. "
-                f"After that just use '{username}'. Don't stack or repeat the title every message.\n"
+        # Get member's actual roles so AI can address them correctly
+        member_roles = self._get_member_roles(invoker, guild)
+        role_ctx = ""
+        if member_roles and not vip_info:
+            roles_str = ", ".join(member_roles)
+            role_ctx = (
+                f"\nThis user's Discord roles are: {roles_str}\n"
+                f"Use the most relevant/highest role to address them at the start "
+                f"of conversation or on important replies. Understand what the role "
+                f"means and address them accordingly (e.g. KNIGHTS = moderator, "
+                f"ROYALTY = admin/owner, GLOBAL PLAYER = top player, Streamer = content creator). "
+                f"For roles you don't recognize, use common sense based on the name. "
+                f"After the first address, just use their name naturally.\n"
             )
 
         # VIP override
@@ -471,9 +495,9 @@ class OracleAgent:
             vip_note = (
                 f"\n[SPECIAL USER]\n"
                 f"{vip_info['personality']}\n"
-                f"Her name/title to use: {title}\n"
+                f"Current title option: '{title}' — use it once naturally, or invent your own variation.\n"
+                f"Do NOT use her username. Do NOT mention her squad unless she asks.\n"
             )
-            address_ctx = ""  # VIP has own addressing rules
 
         # Conversation history
         hist = ""
@@ -487,13 +511,19 @@ class OracleAgent:
 
         # Action result
         if action_result:
-            action_note = f"\n<<SYSTEM: Action executed: {action_result} — confirm briefly, do NOT repeat this tag>>"
+            action_note = (
+                f"\n<<SYSTEM: Action executed successfully: {action_result} "
+                f"— confirm briefly to the user, do NOT copy this tag into your reply>>"
+            )
         else:
-            action_note = "\n<<SYSTEM: No action ran. If they asked for one, say it didn't work and give a quick example>>"
+            action_note = (
+                "\n<<SYSTEM: No action ran. If they asked for one, "
+                "say it didn't work and give a quick example of how to phrase it>>"
+            )
 
         return (
             f"{personality}\n"
-            f"{address_ctx}"
+            f"{role_ctx}"
             f"All kingdoms: {kingdoms_list}\n\n"
             f"{ctx}\n\n"
             f"{vip_note}"
@@ -586,6 +616,7 @@ Scheduling:
 Announcements:
   {{"action":"announce","title":"title","message":"message text"}}
   {{"action":"send_message","channel":"channel-name","message":"message text"}}
+  {{"action":"tag_member","member":"name","message":"optional message","channel":"optional channel"}}
 
 Discord server:
   {{"action":"give_role","member":"name or me","role":"role name"}}
@@ -1191,6 +1222,30 @@ Respond ONLY with valid JSON or null. No explanation, no code blocks, no markdow
             ok = save()
             return f"✅ **{ev['name']}** — {field} updated to '{value}'." if ok else "⚠️ Couldn't save. Try again!"
 
+        # ── tag_member — mention someone in a channel ─────────────────
+        elif act == "tag_member":
+            mb = find_member(action.get("member",""))
+            msg = action.get("message","")
+            ch_name = action.get("channel","")
+            if not mb:
+                return f"❌ Member '{action.get('member')}' not found."
+            # Find target channel — default to current/war-results
+            target = None
+            if ch_name:
+                target = discord.utils.get(guild.text_channels, name=ch_name.lower().replace(" ","-"))
+                if not target:
+                    target = next((c for c in guild.text_channels if ch_name.lower() in c.name.lower()), None)
+            if not target:
+                target = discord.utils.get(guild.text_channels, name="war-results")
+            if not target:
+                return "❌ Couldn't find that channel."
+            full_msg = f"{mb.mention} {msg}" if msg else mb.mention
+            try:
+                await target.send(full_msg)
+                return f"✅ Tagged {mb.display_name} in #{target.name}."
+            except discord.Forbidden:
+                return f"❌ Can't send messages in #{target.name}."
+
         return None  # unknown action
 
     async def think(self, uid: int, username: str, text: str,
@@ -1213,10 +1268,9 @@ Respond ONLY with valid JSON or null. No explanation, no code blocks, no markdow
 
         action_result = None
 
-        if is_mod:
-            # ── SMART TWO-PASS ACTION SYSTEM ──────────────────────────
-            # Pass 1: Ask AI to extract action intent as JSON
-            # Pass 2: Execute the action, then generate the reply
+        # Chica gets full action access regardless of channel
+        is_vip_action = vip_info is not None
+        if is_mod or is_vip_action:
             try:
                 ctx = self.context()
                 action_data = await self._extract_action(text, history, ctx)
@@ -1224,7 +1278,6 @@ Respond ONLY with valid JSON or null. No explanation, no code blocks, no markdow
                     action_result = await self._execute_extracted(action_data, guild, invoker)
             except Exception as e:
                 print(f"⚠️ Smart action error: {e}")
-                # Don't surface to user — AI will handle naturally
 
         prompt = self._build_prompt(username, text, is_mod, history, action_result, vip_info, invoker, guild)
 
