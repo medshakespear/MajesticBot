@@ -110,8 +110,8 @@ WHO YOU ARE:
 - You speak like someone who plays the game, not a wiki page
 
 HOW YOU TALK:
-- Natural, slightly informal — like texting a friend who knows MLBB
-- Short to medium responses. Never over-explain.
+- Natural, slightly informal 
+- Short to medium responses.
 - No AI phrases: "as an AI", "I understand your concern", "certainly", "absolutely", "of course"
 - No dramatic reactions. No emoji spam.
 - If someone's wrong, say so calmly. Don't just agree with everything.
@@ -141,7 +141,7 @@ BANNED PHRASES: "greetings", "I shall", "as you decree", "hath", "thee", "thou",
 "the realm", "sovereign", "warrior" (unless used naturally in MLBB context)
 
 LANGUAGE:
-- Simple clear English only. Short sentences.
+- Simple clear English only.
 - Talk like a real person, not a bot.
 - Casual and friendly — like texting a gamer friend.
 - No fancy words. No formal language.
@@ -155,7 +155,7 @@ MEMBER MODE:
 
 PERSONALITY_MOD = PERSONALITY_BASE + """
 MOD MODE:
-- You can take real actions: record matches, manage events, roles, channels, etc (all actions you can)
+- You can take real actions: record matches, manage events, roles, channels, etc.
 - CRITICAL: Only confirm an action if the system tells you it happened (<<SYSTEM: Action executed>>)
   If you don't see that, the action did NOT run — tell them to rephrase and give a quick example
   Never fake a confirmation. Never say "Done" if the system didn't confirm it.
@@ -575,11 +575,287 @@ class OracleAgent:
             raise RuntimeError("all_failed")
 
     async def _extract_action(self, text: str, history: list, ctx: str) -> dict | None:
-        """
-        Ask the AI to extract a structured action from the message.
-        Returns a dict like {"action": "add_to_squad", "member": "sweet time", "squad": "Royal Talons"}
-        or None if no action detected.
-        """
+        """Extract action from message. Pre-checks obvious patterns, then uses AI."""
+        import re as _re
+
+        sq_keys = list(self.squad_data.get("squads",{}).keys())
+
+        def best_match(raw):
+            raw = raw.strip()
+            raw_l = raw.lower()
+            for k in sq_keys:
+                if k.lower() == raw_l: return k
+            candidates = [k for k in sq_keys if raw_l in k.lower() or k.lower() in raw_l]
+            if candidates: return max(candidates, key=len)
+            return raw
+
+    async def _extract_action(self, text: str, history: list, ctx: str) -> dict | None:
+        """Extract action — direct pattern detection first, AI fallback for unclear cases."""
+        import re as _re
+        sd = self.squad_data
+
+        sq_keys  = list(sd.get("squads",{}).keys())
+        ev_names = [e["name"] for e in sd.get("events",[])]
+
+        def fq(raw, pool):
+            """Fuzzy match raw string against pool."""
+            if not raw: return None
+            raw = raw.strip(); raw_l = raw.lower()
+            for k in pool:
+                if k.lower() == raw_l: return k
+            hits = [k for k in pool if raw_l in k.lower() or k.lower() in raw_l]
+            return max(hits, key=len) if hits else raw
+
+        def fq_sq(raw):  return fq(raw, sq_keys)
+        def fq_ev(raw):  return fq(raw, ev_names)
+
+        t   = text.strip()
+        tl  = t.lower()
+        R   = _re.search
+        S   = _re.IGNORECASE
+
+        # ── helper: get last squad from history ───────────────────────
+        last_sq = None
+        for m in reversed(history[-4:]):
+            for k in sq_keys:
+                if k.lower() in m.get("content","").lower():
+                    last_sq = k; break
+            if last_sq: break
+
+        # ─────────────────────────────────────────────────────────────
+        # MATCH RECORDING
+        # ─────────────────────────────────────────────────────────────
+
+        # draw: any message with "draw/tie/drew" + two names + optional score
+        if any(w in tl for w in ("draw","tie","drew")):
+            m = R(r'([a-z0-9][a-z0-9 _-]*?)\s+(?:vs?\.?|and|against)\s+([a-z0-9 _-]+?)(?:\s+(\d+-\d+))?',tl,S)
+            if not m: m = R(r'(?:draw|tie|drew)\w*\s+([a-z0-9][a-z0-9 _-]+?)\s+(?:vs?\.?|and)\s+([a-z0-9 _-]+)',tl,S)
+            if m:
+                sc = (R(r'\d+-\d+',tl) or type('x',(),{'group':lambda s,n:"1-1"})()).group(0)
+                t1=fq_sq(m.group(1)); t2=fq_sq(m.group(2))
+                if t1 and t2 and t1.lower()!=t2.lower():
+                    return {"action":"record_draw","team1":t1,"team2":t2,"score":sc}
+
+        # win: "X beat/won/defeated Y 2-0"
+        m = R(r'([a-z0-9][a-z0-9 _-]*?)\s+(?:beat|beats|won|defeated|def\.?)\s+([a-z0-9 _-]+?)\s+(\d+-\d+)',tl,S)
+        if m:
+            t1=fq_sq(m.group(1)); t2=fq_sq(m.group(2))
+            if t1 and t2 and t1.lower()!=t2.lower():
+                return {"action":"record_match","winner":t1,"loser":t2,"score":m.group(3)}
+
+        # score: "X vs Y 2-0"
+        m = R(r'([a-z0-9][a-z0-9 _-]*?)\s+vs?\.?\s+([a-z0-9 _-]+?)\s+(\d+)-(\d+)',tl,S)
+        if m:
+            t1=fq_sq(m.group(1)); t2=fq_sq(m.group(2))
+            s1,s2=int(m.group(3)),int(m.group(4))
+            if t1 and t2 and t1.lower()!=t2.lower():
+                if s1==s2: return {"action":"record_draw","team1":t1,"team2":t2,"score":f"{s1}-{s2}"}
+                w=t1 if s1>s2 else t2; l=t2 if s1>s2 else t1
+                return {"action":"record_match","winner":w,"loser":l,"score":f"{s1}-{s2}"}
+
+        # set points: "set X points to 50"
+        m = R(r'set\s+(.+?)\s+points?\s+to\s+(\d+)',tl,S)
+        if m:
+            k=fq_sq(m.group(1))
+            if k: return {"action":"set_points","kingdom":k,"points":int(m.group(2))}
+
+        # set streak: "set X streak to 5"
+        m = R(r'set\s+(.+?)\s+streak\s+to\s+(\d+)',tl,S)
+        if m:
+            k=fq_sq(m.group(1))
+            if k: return {"action":"set_streak","kingdom":k,"streak":int(m.group(2))}
+
+        # reset stats
+        m = R(r'reset\s+(?:stats?|points?|everything)\s+(?:for\s+|of\s+)?(.+)',tl,S)
+        if m:
+            k=fq_sq(m.group(1))
+            if k: return {"action":"reset_stats","kingdom":k}
+
+        # rename kingdom
+        m = R(r'rename\s+(?:kingdom\s+)?(.+?)\s+to\s+(.+)',tl,S)
+        if m: return {"action":"rename_kingdom","old_name":m.group(1).strip(),"new_name":m.group(2).strip()}
+
+        # ─────────────────────────────────────────────────────────────
+        # BOUNTIES
+        # ─────────────────────────────────────────────────────────────
+
+        m = R(r'(?:add|put|place|set)\s+(?:a?\s+)?(?:(\d+)\s+)?(?:point\s+)?bounty\s+on\s+(.+?)(?:\s+(\d+)\s*pts?)?$',tl,S)
+        if m:
+            pts=int(m.group(1) or m.group(3) or 2); k=fq_sq(m.group(2))
+            if k: return {"action":"add_bounty","kingdom":k,"points":pts}
+
+        m = R(r'(?:remove|clear|delete)\s+bounty\s+(?:on\s+|from\s+)?(.+)',tl,S)
+        if m:
+            k=fq_sq(m.group(1).strip())
+            if k: return {"action":"remove_bounty","kingdom":k}
+
+        if R(r'clear\s+all\s+bounties',tl,S):
+            return {"action":"clear_bounties"}
+
+        # ─────────────────────────────────────────────────────────────
+        # EVENTS
+        # ─────────────────────────────────────────────────────────────
+
+        m = R(r'create\s+(?:an?\s+)?event\s+(?:called\s+|named\s+)?["\']?(.+?)["\']?\s+(?:on|for|at|date)\s+([^,\n]+?)(?:\s+max\s+(\d+))?(?:\s+format\s+(\S+))?$',tl,S)
+        if m:
+            return {"action":"create_event","name":m.group(1).strip(),"date":m.group(2).strip(),
+                    "max":int(m.group(3)) if m.group(3) else None,"format":m.group(4) or "TBD"}
+
+        m = R(r'start\s+(?:event\s+)?(?:the\s+)?["\']?(.+?)["\']?$',tl,S)
+        if m:
+            en=fq_ev(m.group(1))
+            if en: return {"action":"start_event","name":en}
+
+        m = R(r'close\s+(?:event\s+)?(?:the\s+)?["\']?(.+?)["\']?$',tl,S)
+        if m:
+            en=fq_ev(m.group(1))
+            if en: return {"action":"close_event","name":en}
+
+        m = R(r'add\s+(.+?)\s+to\s+(?:event\s+|the\s+)?["\']?(.+?)["\']?$',tl,S)
+        if m and not R(r'\b(squad|kingdom|role)\b',tl,S):
+            en=fq_ev(m.group(2))
+            if en: return {"action":"add_registrant","event":en,"participant":m.group(1).strip()}
+
+        m = R(r'remove\s+(.+?)\s+from\s+(?:event\s+|the\s+)?["\']?(.+?)["\']?$',tl,S)
+        if m and not R(r'\b(squad|kingdom|role)\b',tl,S):
+            en=fq_ev(m.group(2))
+            if en: return {"action":"remove_registrant","event":en,"participant":m.group(1).strip()}
+
+        # ─────────────────────────────────────────────────────────────
+        # SQUADS
+        # ─────────────────────────────────────────────────────────────
+
+        # "add X to squad Y" / "add me to Y"
+        m = R(r'add\s+(.+?)\s+to\s+(?:squad\s+|kingdom\s+)?(.+?)(?:\s+as\s+(sub|main))?$',tl,S)
+        if m and not R(r'\bevent\b',tl,S):
+            member=m.group(1).strip(); sq_name=m.group(2).strip(); slot=m.group(3) or "main"
+            sq_match=fq_sq(sq_name)
+            if sq_match: return {"action":"add_to_squad","member":member,"squad":sq_match,"slot":slot}
+
+        # "add X too" → use last squad from history
+        m = R(r'^add\s+(.+?)\s+(?:too|also|as\s+well)$',tl,S)
+        if m and last_sq:
+            return {"action":"add_to_squad","member":m.group(1).strip(),"squad":last_sq,"slot":"main"}
+
+        m = R(r'remove\s+(.+?)\s+from\s+(?:squad\s+|kingdom\s+)?(.+)',tl,S)
+        if m and not R(r'\bevent\b',tl,S):
+            sq_match=fq_sq(m.group(2).strip())
+            if sq_match: return {"action":"remove_from_squad","member":m.group(1).strip(),"squad":sq_match}
+
+        # ─────────────────────────────────────────────────────────────
+        # SCHEDULING
+        # ─────────────────────────────────────────────────────────────
+
+        m = R(r'schedule\s+(.+?)\s+vs\.?\s+(.+?)\s+(?:on|for|at)\s+(.+)',tl,S)
+        if m:
+            return {"action":"schedule","team1":m.group(1).strip(),"team2":m.group(2).strip(),"datetime":m.group(3).strip()}
+
+        # ─────────────────────────────────────────────────────────────
+        # ANNOUNCEMENTS
+        # ─────────────────────────────────────────────────────────────
+
+        m = R(r'(?:post|send|announce)\s+announcement\s+title[:\s]+(.+?)\s+message[:\s]+(.+)',tl,S)
+        if m: return {"action":"announce","title":m.group(1).strip(),"message":m.group(2).strip()}
+
+        m = R(r'send\s+["\'](.+?)["\']\s+to\s+#?([a-z0-9 _-]+)',tl,S)
+        if m: return {"action":"send_message","channel":m.group(2).strip(),"message":m.group(1).strip()}
+
+        m = R(r'tag\s+(\S+)\s+in\s+#?([a-z0-9 _-]+?)(?:\s+(?:with|saying|message)\s+["\']?(.+?)["\']?)?$',tl,S)
+        if m: return {"action":"tag_member","member":m.group(1).strip(),"channel":m.group(2).strip(),"message":m.group(3) or ""}
+
+        # ─────────────────────────────────────────────────────────────
+        # DISCORD ROLES
+        # ─────────────────────────────────────────────────────────────
+
+        m = R(r'give\s+(?:role\s+)?(.+?)\s+(?:role\s+)?to\s+(\S+)',tl,S)
+        if m and not R(r'\bsquad\b|\bkingdom\b|\bevent\b',tl,S):
+            return {"action":"give_role","role":m.group(1).strip(),"member":m.group(2).strip()}
+
+        m = R(r'remove\s+(?:role\s+)?(.+?)\s+(?:role\s+)?from\s+(\S+)',tl,S)
+        if m and not R(r'\bsquad\b|\bkingdom\b|\bevent\b',tl,S):
+            return {"action":"remove_role","role":m.group(1).strip(),"member":m.group(2).strip()}
+
+        m = R(r'create\s+(?:a\s+)?(?:new\s+)?role\s+(?:called\s+|named\s+)?(.+?)(?:\s+color\s+(\S+))?$',tl,S)
+        if m: return {"action":"create_role","name":m.group(1).strip(),"color":m.group(2) or "default"}
+
+        m = R(r'delete\s+(?:the\s+)?role\s+(.+)',tl,S)
+        if m: return {"action":"delete_role","name":m.group(1).strip()}
+
+        # ─────────────────────────────────────────────────────────────
+        # CHANNELS
+        # ─────────────────────────────────────────────────────────────
+
+        m = R(r'create\s+(?:a\s+)?(?:text\s+)?channel\s+(?:called\s+|named\s+)?([a-z0-9 _-]+?)(?:\s+in\s+(.+))?$',tl,S)
+        if m and not R(r'\bevent\b',tl,S):
+            return {"action":"create_channel","name":m.group(1).strip().replace(" ","-"),"category":m.group(2) or ""}
+
+        m = R(r'delete\s+(?:the\s+)?(?:channel\s+)?#?([a-z0-9 _-]+)',tl,S)
+        if m and R(r'\bchannel\b',tl,S):
+            return {"action":"delete_channel","name":m.group(1).strip()}
+
+        # ─────────────────────────────────────────────────────────────
+        # MODERATION
+        # ─────────────────────────────────────────────────────────────
+
+        m = R(r'kick\s+(\S+?)(?:\s+(?:for|reason)\s*[:\s]+(.+))?$',tl,S)
+        if m: return {"action":"kick","member":m.group(1).strip(),"reason":m.group(2) or "Removed by moderator"}
+
+        m = R(r'ban\s+(\S+?)(?:\s+(?:for|reason)\s*[:\s]+(.+))?$',tl,S)
+        if m: return {"action":"ban","member":m.group(1).strip(),"reason":m.group(2) or "Banned by moderator"}
+
+        m = R(r'timeout\s+(\S+?)\s+(?:for\s+)?(\d+)\s*(?:min|minute)',tl,S)
+        if m: return {"action":"timeout","member":m.group(1).strip(),"minutes":int(m.group(2)),"reason":""}
+
+        # ─────────────────────────────────────────────────────────────
+        # READ QUERIES
+        # ─────────────────────────────────────────────────────────────
+
+        m = R(r'(?:show|list|get|who(?:\'s)?\s+in|members?\s+of)\s+(.+)',tl,S)
+        if m:
+            sq_match = fq_sq(m.group(1).strip())
+            if sq_match and sq_match in sq_keys:
+                return {"action":"list_squad","squad":sq_match}
+
+        if R(r'(?:list|show)\s+(?:all\s+)?(?:squads?|kingdoms?)',tl,S):
+            return {"action":"list_squads"}
+
+        m = R(r'(?:match\s+history|recent\s+matches?|results?)\s+(?:for\s+|of\s+)?(.+)',tl,S)
+        if m:
+            return {"action":"get_match_history","kingdom":fq_sq(m.group(1).strip()) or "","limit":10}
+
+        m = R(r'(?:show|get|view)\s+profile\s+(?:of\s+|for\s+)?(\S+)',tl,S)
+        if m: return {"action":"get_profile","member":m.group(1).strip()}
+
+        m = R(r'(?:list|show)\s+members?\s+(?:with\s+role\s+)?(.+)',tl,S)
+        if m and R(r'\brole\b',tl,S):
+            return {"action":"list_members","role":m.group(1).replace("role","").strip()}
+
+        if R(r'(?:list|show)\s+(?:all\s+)?(?:server\s+)?roles?',tl,S):
+            return {"action":"list_roles"}
+
+        if R(r'(?:list|show)\s+(?:all\s+)?channels?',tl,S):
+            return {"action":"list_channels"}
+
+        if R(r'oracle\s+status|bot\s+status',tl,S):
+            return {"action":"oracle_status"}
+
+        # ─────────────────────────────────────────────────────────────
+        # SINGLE KINGDOM NAME — context-based
+        # ─────────────────────────────────────────────────────────────
+        # If message is just a kingdom name (answer to "which squad?")
+        stripped = tl.strip()
+        for k in sq_keys:
+            if stripped == k.lower() or stripped == k.lower()+"." or stripped == k.lower()+"!":
+                # Check history for "which squad" context
+                for hm in reversed(history[-3:]):
+                    if any(w in hm.get("content","").lower() for w in ("squad","kingdom","join","which","what")):
+                        return {"action":"add_to_squad","member":"me","squad":k,"slot":"main"}
+                # Otherwise just show squad info
+                return {"action":"list_squad","squad":k}
+
+        # ─────────────────────────────────────────────────────────────
+        # FALL THROUGH TO AI for complex/ambiguous requests
+        # ─────────────────────────────────────────────────────────────
         hist_text = ""
         for m in history[-3:]:
             role = "Mod" if m["role"] == "user" else "Oracle"
@@ -589,103 +865,71 @@ class OracleAgent:
         squads_list  = ", ".join(list(self.squad_data.get("squads",{}).keys()))  # ALL kingdoms
         events_list  = ", ".join(e["name"] for e in self.squad_data.get("events",[]) if e["status"] in ("open","live"))
 
-        extraction_prompt = f"""You are an action extractor for a Discord bot managing a Mobile Legends Discord server called Majestic Dominion.
+        extraction_prompt = f"""Extract an action from this mod message. Return JSON or null.
 
-The mod said: "{text}"
-
-Recent conversation (use this for context — e.g. if they said a kingdom name in reply to a question, that's the context):
-{hist_text}
+Message: "{text}"
 
 Available kingdoms: {squads_list}
 Active events: {events_list or "none"}
+Recent chat: {hist_text or "none"}
 
-Your job: Determine if the mod wants to perform an action. If yes, return ONLY a JSON object. If no (just a question or chat), return ONLY: null
+MATCH RECORDING — these ALWAYS trigger an action:
+- Any message with two kingdom names + a score (X-X) → record_match or record_draw
+- "draw", "tie", "1-1", "0-0" between two teams → record_draw
+- "beat", "won", "defeated", "vs" with a score where one side is higher → record_match
+- Scores like "2-0", "1-0", "3-1" → winner has the higher number
+- Kingdom names can be partial — use the closest match from: {squads_list}
 
-ALL SUPPORTED ACTIONS:
+ACTIONS:
+record_match: {{"action":"record_match","winner":"kingdom","loser":"kingdom","score":"2-0"}}
+record_draw:  {{"action":"record_draw","team1":"kingdom","team2":"kingdom","score":"1-1"}}
+add_to_squad: {{"action":"add_to_squad","member":"name or me","squad":"kingdom","slot":"main"}}
+remove_from_squad: {{"action":"remove_from_squad","member":"name","squad":"kingdom"}}
+set_points:   {{"action":"set_points","kingdom":"name","points":50}}
+set_streak:   {{"action":"set_streak","kingdom":"name","streak":5}}
+reset_stats:  {{"action":"reset_stats","kingdom":"name"}}
+rename_kingdom: {{"action":"rename_kingdom","old_name":"old","new_name":"new"}}
+add_bounty:   {{"action":"add_bounty","kingdom":"name","points":3}}
+remove_bounty:{{"action":"remove_bounty","kingdom":"name"}}
+clear_bounties:{{"action":"clear_bounties"}}
+create_event: {{"action":"create_event","name":"name","date":"date","max":16,"format":"1v1"}}
+start_event:  {{"action":"start_event","name":"event name"}}
+close_event:  {{"action":"close_event","name":"event name"}}
+add_registrant:{{"action":"add_registrant","event":"event","participant":"name"}}
+remove_registrant:{{"action":"remove_registrant","event":"event","participant":"name"}}
+replace_registrant:{{"action":"replace_registrant","event":"event","old":"name","new":"name"}}
+edit_event:   {{"action":"edit_event","name":"event","field":"date","value":"new value"}}
+schedule:     {{"action":"schedule","team1":"name","team2":"name","datetime":"when"}}
+announce:     {{"action":"announce","title":"title","message":"text"}}
+send_message: {{"action":"send_message","channel":"channel","message":"text"}}
+tag_member:   {{"action":"tag_member","member":"name","message":"text","channel":"channel"}}
+give_role:    {{"action":"give_role","member":"name","role":"role"}}
+remove_role:  {{"action":"remove_role","member":"name","role":"role"}}
+create_role:  {{"action":"create_role","name":"role","color":"gold"}}
+delete_role:  {{"action":"delete_role","name":"role"}}
+create_channel:{{"action":"create_channel","name":"channel","category":"optional"}}
+delete_channel:{{"action":"delete_channel","name":"channel"}}
+kick:         {{"action":"kick","member":"name","reason":"reason"}}
+ban:          {{"action":"ban","member":"name","reason":"reason"}}
+timeout:      {{"action":"timeout","member":"name","minutes":10,"reason":"reason"}}
+list_squad:   {{"action":"list_squad","squad":"kingdom"}}
+list_squads:  {{"action":"list_squads"}}
+get_match_history:{{"action":"get_match_history","kingdom":"optional","limit":10}}
+get_profile:  {{"action":"get_profile","member":"name"}}
+list_members: {{"action":"list_members","role":"optional"}}
+list_roles:   {{"action":"list_roles"}}
+list_channels:{{"action":"list_channels"}}
+oracle_status:{{"action":"oracle_status"}}
 
-Bot/Squad management:
-  {{"action":"add_to_squad","member":"name or me or username","squad":"kingdom name","slot":"main"}}
-  {{"action":"remove_from_squad","member":"name","squad":"kingdom name"}}
+RULES:
+- Kingdom names: use fuzzy matching, partial names OK
+- "me"/"myself" = the person typing
+- If two kingdoms + score present → ALWAYS match/draw action, don't return null
+- "draw"/"tie"/"1-1" with two teams → record_draw
+- Context: if prev message mentioned a squad, use it for "too"/"also" patterns
+- Return null ONLY for pure questions/chat with no action
 
-Match recording:
-  {{"action":"record_match","winner":"kingdom name","loser":"kingdom name","score":"2-0"}}
-  {{"action":"record_draw","team1":"kingdom name","team2":"kingdom name","score":"1-1"}}
-  {{"action":"set_points","kingdom":"name","points":50}}
-
-Bounties:
-  {{"action":"add_bounty","kingdom":"name","points":3}}
-  {{"action":"remove_bounty","kingdom":"name"}}
-  {{"action":"clear_bounties"}}
-
-Events:
-  {{"action":"create_event","name":"name","date":"date string","max":16,"format":"1v1"}}
-  {{"action":"start_event","name":"event name"}}
-  {{"action":"close_event","name":"event name"}}
-  {{"action":"add_registrant","event":"event name","participant":"name"}}
-  {{"action":"remove_registrant","event":"event name","participant":"name"}}
-
-Scheduling:
-  {{"action":"schedule","team1":"name","team2":"name","datetime":"when"}}
-
-Announcements:
-  {{"action":"announce","title":"title","message":"message text"}}
-  {{"action":"send_message","channel":"channel-name","message":"message text"}}
-  {{"action":"tag_member","member":"name","message":"optional message","channel":"optional channel"}}
-
-Discord server:
-  {{"action":"give_role","member":"name or me","role":"role name"}}
-  {{"action":"remove_role","member":"name","role":"role name"}}
-  {{"action":"create_role","name":"role name","color":"gold"}}
-  {{"action":"delete_role","name":"role name"}}
-  {{"action":"create_channel","name":"channel-name","category":"optional category"}}
-  {{"action":"delete_channel","name":"channel-name"}}
-  {{"action":"kick","member":"name","reason":"reason"}}
-  {{"action":"ban","member":"name","reason":"reason"}}
-  {{"action":"timeout","member":"name","minutes":10,"reason":"reason"}}
-  {{"action":"get_profile","member":"name"}}
-  {{"action":"list_members","role":"optional role filter"}}
-  {{"action":"list_roles"}}
-  {{"action":"list_channels"}}
-
-Bot status:
-  {{"action":"oracle_status"}}
-
-Read/query (no changes, just reading data):
-  {{"action":"list_squads"}}
-  {{"action":"list_squad","squad":"kingdom name"}}
-  {{"action":"get_match_history","kingdom":"optional filter","limit":10}}
-  {{"action":"get_profile","member":"name"}}
-  {{"action":"list_members","role":"optional role filter"}}
-  {{"action":"list_roles"}}
-  {{"action":"list_channels"}}
-
-NATURAL LANGUAGE HINTS (map these to actions):
-- "show me Royal Talons" or "who is in Royal Talons" or "Royal Talons members" → list_squad
-- "who leads Royal Talons" or "who is the leader of X" → list_squad (leader is shown in result)
-- "show all kingdoms" or "list squads" → list_squads
-- "match history for X" or "X recent results" → get_match_history
-- "show profile of X" → get_profile
-- "who has role X" or "list X role" → list_members with role filter
-
-Kingdom management:
-  {{"action":"set_streak","kingdom":"name","streak":5}}
-  {{"action":"reset_stats","kingdom":"name"}}
-  {{"action":"rename_kingdom","old_name":"old","new_name":"new"}}
-
-Event management (extra):
-  {{"action":"replace_registrant","event":"event name","old":"old name","new":"new name"}}
-  {{"action":"edit_event","name":"event name","field":"date","value":"new value"}}
-
-IMPORTANT CONTEXT RULES:
-- "me", "myself", "I" → the person talking (use member: "me")
-- "add X too" or "add X as well" → same action as before, same squad/event
-- A single word like "Royal Talons" after being asked which squad → add_to_squad for the invoker
-- "yes", "confirm", "do it" after describing an action → execute that action
-- "too", "also", "as well" → repeat the last action type with new name
-- Partial kingdom names are fine — the bot will fuzzy match them
-- If unclear between question and action, lean toward action for direct short replies
-
-Respond ONLY with valid JSON or null. No explanation, no code blocks, no markdown."""
+Return ONLY the JSON object or null. No explanation."""
 
         try:
             raw = await self._ai_call(extraction_prompt)
