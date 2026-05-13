@@ -1,6 +1,6 @@
 # =====================================================================
 #   ORACLE AI AGENT v2 — Majestic Dominion
-#   Primary: Groq (free) | Fallback: Gemini REST (free)
+#   Primary: Gemini (free) | Backup: Groq (free) | Emergency: Mistral (free)
 #
 #   SECURITY MODEL:
 #   ─────────────────────────────────────────────────────────────────
@@ -49,8 +49,8 @@ ROYAL_ORACLE_CHANNEL = "royal-oracle"        # any channel containing this → r
 
 # ── Models ────────────────────────────────────────────────────────────
 GROQ_MODEL   = "llama-3.3-70b-versatile"
-GEMINI_MODEL = "gemini-2.0-flash"
-MISTRAL_MODEL = "ministral-3b-latest" # free tier
+GEMINI_MODEL = "gemini-2.5-flash"
+MISTRAL_MODEL = "ministral-3b-latest"   # free tier
 MAX_TOKENS   = 800
 
 # ── Rate limits ───────────────────────────────────────────────────────
@@ -64,7 +64,7 @@ VIP_MEMBERS = {
         "titles": [
             "the boss", "your highness", "the one and only",
             "the legend herself", "our beloved queen", "the CEO of this server",
-           "Pretty Chica", "the one who signs the checks"
+            "Pretty Chica", "the one who signs the checks"
         ],
         "personality": """
 SPECIAL USER — This is the owner of Majestic Dominion. She runs everything.
@@ -140,23 +140,11 @@ BANNED PHRASES: "greetings", "I shall", "as you decree", "hath", "thee", "thou",
 "certainly", "absolutely", "of course", "as an AI", "I understand your concern",
 "the realm", "sovereign", "warrior" (unless used naturally in MLBB context)
 
-LANGUAGE STYLE — DARIJA + SIMPLE ENGLISH:
-How to talk:
-- Default is Moroccan Darija mixed with very simple short English words
-- Sometimes go full Darija for casual replies, reactions, or when the vibe fits
-- English words should be basic — "win", "lose", "game", "play", "rank", "top", "bad", "good", "go"
-- Keep hero names, commands (/events etc.) and numbers in English — everything else can be Darija
-- Write Darija in Latin letters (like how Moroccans text): wah, mzyan, khoya, safi, bzaf, yallah, daba, wallah, 3la rasi, wakha, machi, bghit, kayn, makaynch, fin, chkun, 3lach, kif, hadchi, dir, khdm, ta9der, fhmt, hna, houma, ana, nta, nti, ntoma, bezzaf, tqriban, mdrbt, htta, walakin, smiytha, ghir, rah, gal, ga3, men, 3nd, fih, matchi, kaml, chi
-- Feel like a Moroccan friend texting — not a translator, not a bot
-- No formal language at all
-
-Examples of how to reply:
-  Someone asks who's winning → "Phoenix kaydiru f top daba, 47 points — streak dyalhom bzzaf. Storm khdam 3lihom mn wra"
-  Someone asks about a hero → "Fanny khassha cables — dir Franco wla Kaja m3aha, ghir root w khalas"
-  Someone says hi → "labas 3lik, chno bghiti?"
-  Simple confirm → "wah wah safi, daba"
-  Something wrong → "la la machi haka khouya"
-  Hyping someone → "wallah had chi mzyan bzaf 3la rasi"
+LANGUAGE:
+- Simple clear English only. Short sentences.
+- Talk like a real person, not a bot.
+- Casual and friendly — like texting a gamer friend.
+- No fancy words. No formal language.
 """
 
 PERSONALITY_MEMBER = PERSONALITY_BASE + """
@@ -167,8 +155,7 @@ MEMBER MODE:
 
 PERSONALITY_MOD = PERSONALITY_BASE + """
 MOD MODE:
-- You can take real actions: record matches, manage events, roles, channels, etc.
-- Get to the point — mods are busy
+- You can take real actions: record matches, manage events, roles, channels, etc (all actions you can)
 - CRITICAL: Only confirm an action if the system tells you it happened (<<SYSTEM: Action executed>>)
   If you don't see that, the action did NOT run — tell them to rephrase and give a quick example
   Never fake a confirmation. Never say "Done" if the system didn't confirm it.
@@ -195,7 +182,7 @@ class OracleAgent:
         gk = os.getenv("GROQ_API_KEY")
         if GROQ_OK and gk:
             self.groq = AsyncGroq(api_key=gk)
-            print(f"✅ Oracle: Groq ({GROQ_MODEL}) ready — EMERGENCY")
+            print(f"✅ Oracle: Groq ({GROQ_MODEL}) ready — BACKUP")
         else:
             print("⚠️  Oracle: No GROQ_API_KEY")
 
@@ -206,7 +193,7 @@ class OracleAgent:
         else:
             print("⚠️  Oracle: No GEMINI_API_KEY")
 
-        # Mistral (EMERGENCY — free)
+        # Mistral (EMERGENCY — free, last resort)
         self.mistral_client = None
         mk = os.getenv("MISTRAL_API_KEY")
         if MISTRAL_OK and mk:
@@ -336,8 +323,10 @@ class OracleAgent:
             roster_txt   = ", ".join(roster_names) if roster_names else "empty"
             subs_txt     = ", ".join(sub_names)    if sub_names    else "none"
             achievements = v.get("achievements", [])
+            cs_info  = v.get("current_streak", {"type":"none","count":0})
+            streak_s = f"{cs_info.get('count',0)}{cs_info.get('type','')[0].upper()}" if cs_info.get("count",0) > 0 else "0"
             kingdom_lines.append(
-                f"  #{i} {tag} {n}: {pts}pts {w}W/{d}D/{l}L streak:{streak}\n"
+                f"  #{i} {tag} {n}: {pts}pts {w}W/{d}D/{l}L streak:{streak_s}\n"
                 f"    Main Roster ({len(roster_names)}): {roster_txt}\n"
                 f"    Subs ({len(sub_names)}): {subs_txt}"
                 + (f"\n    Achievements: {', '.join(achievements)}" if achievements else "")
@@ -499,13 +488,17 @@ class OracleAgent:
         if member_roles and not vip_info:
             roles_str = ", ".join(member_roles)
             role_ctx = (
-                f"\nThis user's Discord roles are: {roles_str}\n"
-                f"Use the most relevant/highest role to address them at the start "
-                f"of conversation or on important replies. Understand what the role "
-                f"means and address them accordingly (e.g. KNIGHTS = moderator, "
-                f"ROYALTY = admin/owner, GLOBAL PLAYER = top player, Streamer = content creator). "
-                f"For roles you don't recognize, use common sense based on the name. "
-                f"After the first address, just use their name naturally.\n"
+                f"\nUser's name: {username}\n"
+                f"User's Discord roles: {roles_str}\n"
+                f"How to address them:\n"
+                f"- ROYALTY role → they are an admin/owner → call them by name, maybe say 'boss' once\n"
+                f"- KNIGHTS role → they are a moderator → say 'hey {username}' or just their name, maybe say 'mod' naturally once in first reply\n"
+                f"- GLOBAL PLAYER role → top ranked player → acknowledge their skill, use their name\n"
+                f"- Streamer role → content creator → use their name, reference streaming once if relevant\n"
+                f"- MAJESTIC role → regular member → just use their name, maybe say 'member' once\n"
+                f"- Any other role → read the name, understand what it means, address them accordingly\n"
+                f"IMPORTANT: Never write '[name]' literally. Always use the actual name: {username}\n"
+                f"Only reference their role ONCE at the start — after that just use their name.\n"
             )
 
         # VIP override
@@ -666,6 +659,14 @@ Read/query (no changes, just reading data):
   {{"action":"list_roles"}}
   {{"action":"list_channels"}}
 
+NATURAL LANGUAGE HINTS (map these to actions):
+- "show me Royal Talons" or "who is in Royal Talons" or "Royal Talons members" → list_squad
+- "who leads Royal Talons" or "who is the leader of X" → list_squad (leader is shown in result)
+- "show all kingdoms" or "list squads" → list_squads
+- "match history for X" or "X recent results" → get_match_history
+- "show profile of X" → get_profile
+- "who has role X" or "list X role" → list_members with role filter
+
 Kingdom management:
   {{"action":"set_streak","kingdom":"name","streak":5}}
   {{"action":"reset_stats","kingdom":"name"}}
@@ -700,10 +701,16 @@ Respond ONLY with valid JSON or null. No explanation, no code blocks, no markdow
             return None
 
     async def _execute_extracted(self, action: dict, guild, invoker) -> str:
-        """Execute a structured action dict."""
-        sd  = self.squad_data
-        sq  = sd.get("squads", {})
-        act = action.get("action", "")
+        """Execute a structured action dict using real bot functions where possible."""
+        import sys
+        sd   = self.squad_data
+        sq   = sd.get("squads", {})
+        act  = action.get("action", "")
+        main = sys.modules.get("__main__")  # reference to bot.py
+
+        def bot_fn(name):
+            """Get a function from bot.py main module."""
+            return getattr(main, name, None) if main else None
 
         def fuzzy(name, d):
             name = name.lower().strip()
@@ -731,10 +738,8 @@ Respond ONLY with valid JSON or null. No explanation, no code blocks, no markdow
         def save():
             saved = False
             try:
-                import sys
-                main = sys.modules.get("__main__")
-                if main and hasattr(main, "save_data"):
-                    main.save_data(sd); saved = True
+                sf = bot_fn("save_data")
+                if sf: sf(sd); saved = True
             except Exception as e:
                 print(f"⚠️ save via main: {e}")
             if not saved:
@@ -748,13 +753,22 @@ Respond ONLY with valid JSON or null. No explanation, no code blocks, no markdow
                     print(f"⚠️ JSON fallback save: {e2}")
             return saved
 
+        async def oracle_log(title, desc):
+            """Log to bot-logs showing Oracle as the executor."""
+            log = bot_fn("log_action")
+            if log:
+                await log(guild, f"🔮 {title}", f"Oracle (requested by {invoker.display_name}): {desc}")
+
         async def post_to(ch_name, embed):
             ch = discord.utils.get(guild.text_channels, name=ch_name)
             if ch:
-                try: await ch.send(embed=embed)
+                try:
+                    apply = bot_fn("apply_branding")
+                    if apply: apply(embed, thumbnail=True, author=True)
+                    await ch.send(embed=embed)
                 except: pass
 
-        # ── add_to_squad ──────────────────────────────────────────────
+        # ── add_to_squad — assigns real Discord role + updates nickname ─
         if act == "add_to_squad":
             member_ref = action.get("member", "me")
             sq_name    = action.get("squad", "")
@@ -762,44 +776,152 @@ Respond ONLY with valid JSON or null. No explanation, no code blocks, no markdow
             mb = find_member(member_ref)
             sm = fuzzy(sq_name, sq)
             if not mb:
-                return f"❌ Member '{member_ref}' not found on the server."
+                return f"⚠️ Can't find member '{member_ref}' on the server."
             if not sm:
                 avail = ", ".join(list(sq.keys())[:8])
-                return f"❌ Kingdom '{sq_name}' not found. Available: {avail}"
-            roster = sq[sm].setdefault(slot, [])
-            if mb.id in roster:
-                return f"ℹ️ **{mb.display_name}** is already in **{sm}** ({slot})."
-            roster.append(mb.id)
-            ok = save()
-            if not ok: return "⚠️ I couldn't save that. Try again or use /mod."
-            count = len(sq[sm].get(slot, []))
-            return f"✅ **{mb.display_name}** added to **{sm}** ({slot}). Roster: {count} player(s)."
+                return f"⚠️ Kingdom '{sq_name}' not found. Available: {avail}"
 
-        # ── record_match ──────────────────────────────────────────────
+            squad_role = discord.utils.get(guild.roles, name=sm)
+            if not squad_role:
+                return f"⚠️ Discord role '{sm}' not found. The kingdom needs a matching Discord role."
+
+            # Use real bot functions
+            get_ms    = bot_fn("get_member_squad")
+            safe_nick = bot_fn("safe_nick_update")
+            upd_plr   = bot_fn("update_player_squad")
+            SQUADS_d  = bot_fn("SQUADS") or {}
+
+            # Check already in squad
+            old_squad = None
+            if get_ms:
+                existing_role, _ = get_ms(mb, guild)
+                if existing_role and existing_role.name == sm:
+                    return f"ℹ️ **{mb.display_name}** is already in **{sm}**."
+                if existing_role:
+                    old_squad = existing_role.name
+                    try: await mb.remove_roles(existing_role)
+                    except: pass
+            else:
+                for sn in SQUADS_d:
+                    r = discord.utils.get(guild.roles, name=sn)
+                    if r and r in mb.roles:
+                        old_squad = sn
+                        try: await mb.remove_roles(r)
+                        except: pass
+                        break
+
+            # Assign Discord role
+            try:
+                await mb.add_roles(squad_role)
+            except discord.Forbidden:
+                return "⚠️ Bot lacks permission to assign roles. Check role hierarchy."
+
+            # Update nickname
+            tag = SQUADS_d.get(sm, "")
+            if safe_nick:
+                try: await safe_nick(mb, squad_role, tag)
+                except: pass
+
+            # Update player data
+            if upd_plr:
+                try: upd_plr(mb.id, sm, old_squad)
+                except: pass
+
+            # Update main_roster in squad data
+            sq[sm].setdefault(slot, [])
+            if mb.id not in sq[sm][slot]:
+                sq[sm][slot].append(mb.id)
+            save()
+
+            await oracle_log("➕ Squad Member Added",
+                f"**{mb.display_name}** → **{sm}** | Discord role assigned | Nickname updated")
+            return f"✅ **{mb.display_name}** added to **{sm}** — Discord role assigned, nickname updated."
+
+        # ── record_match — uses REAL bot calculate_glory_points ───────
         elif act == "record_match":
-            wn = fuzzy(action.get("winner",""), sq)
-            ln = fuzzy(action.get("loser",""), sq)
-            score = action.get("score", "?")
+            wn    = fuzzy(action.get("winner",""), sq)
+            ln    = fuzzy(action.get("loser",""),  sq)
+            score = action.get("score","?")
             if not wn or not ln:
-                return f"❌ Kingdom not found. Winner:'{action.get('winner')}' Loser:'{action.get('loser')}'"
-            sq[wn]["wins"]   = sq[wn].get("wins",0)+1
-            sq[wn]["points"] = sq[wn].get("points",0)+3
-            sq[wn]["streak"] = sq[wn].get("streak",0)+1
-            sq[ln]["losses"] = sq[ln].get("losses",0)+1
-            sq[ln]["streak"] = 0
-            sd.setdefault("matches",[]).append({
-                "id": len(sd.get("matches",[]))+1, "team1":wn, "team2":ln,
-                "score":score, "winner":wn,
-                "date": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
-                "recorded_by": str(invoker.id), "source":"oracle"
-            })
+                return f"⚠️ Kingdom not found. Winner:'{action.get('winner')}' Loser:'{action.get('loser')}'"
+            try: s1, s2 = map(int, score.split("-"))
+            except: s1, s2 = 1, 0
+
+            t1d = sq[wn]; t2d = sq[ln]
+            calc    = bot_fn("calculate_glory_points")
+            upd     = bot_fn("update_streak")
+            chk_ach = bot_fn("check_achievements")
+            get_part= bot_fn("get_match_participants")
+            ref_b   = bot_fn("refresh_bounties")
+            ann_m   = bot_fn("announce_match")
+            ann_str = bot_fn("announce_streak")
+            SQUADS_d= bot_fn("SQUADS") or {}
+            VQ      = bot_fn("VICTORY_QUOTES") or ["Victory!"]
+            DQ      = bot_fn("DRAW_QUOTES")    or ["Draw!"]
+
+            if s1 == s2:
+                t1_pts = t2_pts = 1; glory_t1 = glory_t2 = []
+                t1d["draws"] = t1d.get("draws",0)+1; t1d["points"] = t1d.get("points",0)+1
+                t2d["draws"] = t2d.get("draws",0)+1; t2d["points"] = t2d.get("points",0)+1
+                t1_str = upd(wn,"draw") if upd else {"type":"draw","count":0}
+                t2_str = upd(ln,"draw") if upd else {"type":"draw","count":0}
+                result_text = f"⚔️ **{wn}** and **{ln}** drew!"; flavor = random.choice(DQ); actual_winner = "draw"
+            else:
+                if calc: t1_pts, t2_pts, glory_t1, glory_t2 = calc(wn, ln, s1, s2)
+                else:    t1_pts, t2_pts, glory_t1, glory_t2 = 3, 0, [], []
+                t1d["wins"]   = t1d.get("wins",0)+1;   t1d["points"] = t1d.get("points",0)+t1_pts
+                t2d["losses"] = t2d.get("losses",0)+1
+                t1_str = upd(wn,"win")  if upd else {"type":"win","count":1}
+                t2_str = upd(ln,"loss") if upd else {"type":"loss","count":1}
+                result_text = f"🏆 **{wn}** defeated **{ln}**!"; flavor = random.choice(VQ); actual_winner = wn
+
+            for ch in sd.get("challenges",[]):
+                if ch["status"] in ("accepted","scheduled") and {ch["challenger"],ch["challenged"]} == {wn,ln}:
+                    ch["status"] = "completed"
+            if ref_b: ref_b()
+            t1_ach = chk_ach(wn) if chk_ach else []
+            t2_ach = chk_ach(ln) if chk_ach else []
+            match_id = str(uuid.uuid4())[:8]
+            match_data = {"match_id":match_id,"team1":wn,"team2":ln,"score":score,
+                "date":datetime.utcnow().isoformat(),"added_by":invoker.id,"added_by_oracle":True,
+                "team1_participants":(get_part(wn) if get_part else []),
+                "team2_participants":(get_part(ln) if get_part else []),
+                "t1_pts":t1_pts,"t2_pts":t2_pts}
+            sd.setdefault("matches",[]).append(match_data)
+            t1d.setdefault("match_history",[]).append(match_data)
+            t2d.setdefault("match_history",[]).append(match_data)
             ok = save()
-            if not ok: return "⚠️ Couldn't save the match. Try again or use /mod → Record Battle."
-            embed = discord.Embed(title="⚔️ BATTLE RECORDED",
-                description=f"**{wn}** defeated **{ln}** — **{score}**\n+3 Glory Points to {wn}",
-                color=0xffd700, timestamp=datetime.utcnow())
-            await post_to("war-results", embed)
-            return f"✅ **{wn}** beat **{ln}** {score} — +3 glory pts, posted to war-results."
+            if not ok: return "⚠️ Couldn't save. Try again or use /mod → Record Battle."
+
+            tag1 = SQUADS_d.get(wn,"⚔️"); tag2 = SQUADS_d.get(ln,"⚔️")
+            embed = discord.Embed(title="📜 The Royal Chronicles Are Written",
+                description=f"{result_text}\n\n*{flavor}*", color=0xffd700, timestamp=datetime.utcnow())
+            embed.add_field(name="🆔 Match ID", value=f"`{match_id}`", inline=False)
+            embed.add_field(name="⚔️ Score",    value=f"**{score}**",  inline=True)
+            t1i = f"💎 {t1d.get('points',0)} pts (**+{t1_pts}**) | 🏆 {t1d.get('wins',0)}W ⚔️ {t1d.get('draws',0)}D 💀 {t1d.get('losses',0)}L"
+            if glory_t1: t1i += "\n"+" ".join(glory_t1)
+            if t1_str.get("count",0)>=3:
+                t1i += f"\n{'🔥' if t1_str['type']=='win' else '❄️'} **{t1_str['count']} {t1_str['type'].upper()} STREAK!**"
+            embed.add_field(name=f"{tag1} {wn}", value=t1i, inline=False)
+            t2i = f"💎 {t2d.get('points',0)} pts (**+{t2_pts}**) | 🏆 {t2d.get('wins',0)}W ⚔️ {t2d.get('draws',0)}D 💀 {t2d.get('losses',0)}L"
+            if glory_t2: t2i += "\n"+" ".join(glory_t2)
+            if t2_str.get("count",0)>=3:
+                t2i += f"\n{'🔥' if t2_str['type']=='win' else '❄️'} **{t2_str['count']} {t2_str['type'].upper()} STREAK!**"
+            embed.add_field(name=f"{tag2} {ln}", value=t2i, inline=False)
+            if t1_ach or t2_ach:
+                at = ""
+                for a in t1_ach: at += f"🎖️ **{wn}**: {a['name']} - *{a['desc']}*\n"
+                for a in t2_ach: at += f"🎖️ **{ln}**: {a['name']} - *{a['desc']}*\n"
+                embed.add_field(name="🏅 New Achievements!", value=at, inline=False)
+            embed.add_field(name="🔮 Recorded by", value="Oracle AI", inline=False)
+            embed.set_footer(text=f"Match ID: {match_id} | Recorded via Oracle")
+            if ann_m: await ann_m(guild, embed)
+            else: await post_to("war-results", embed)
+            if ann_str:
+                if t1_str.get("count",0) in (3,5,7,10): await ann_str(guild,wn,t1_str["type"],t1_str["count"])
+                if t2_str.get("count",0) in (3,5,7,10): await ann_str(guild,ln,t2_str["type"],t2_str["count"])
+            await oracle_log("📜 Battle Recorded", f"**{wn}** vs **{ln}** ({score}) → {actual_winner} | ID:`{match_id}`")
+            return f"✅ Match recorded: **{wn}** vs **{ln}** {score} — posted to war-results with full glory points."
 
         # ── record_draw ───────────────────────────────────────────────
         elif act == "record_draw":
@@ -807,18 +929,19 @@ Respond ONLY with valid JSON or null. No explanation, no code blocks, no markdow
             t2 = fuzzy(action.get("team2",""), sq)
             score = action.get("score","1-1")
             if not t1 or not t2:
-                return f"❌ Kingdom not found: '{action.get('team1')}' or '{action.get('team2')}'"
+                return f"⚠️ Kingdom not found: '{action.get('team1')}' or '{action.get('team2')}'"
+            upd = bot_fn("update_streak")
             for k in [t1,t2]:
                 sq[k]["draws"]  = sq[k].get("draws",0)+1
                 sq[k]["points"] = sq[k].get("points",0)+1
-            sd.setdefault("matches",[]).append({
-                "id": len(sd.get("matches",[]))+1, "team1":t1, "team2":t2,
-                "score":score, "winner":"draw",
-                "date": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
-                "recorded_by": str(invoker.id), "source":"oracle"
-            })
+            if upd: upd(t1,"draw"); upd(t2,"draw")
+            match_id = str(uuid.uuid4())[:8]
+            sd.setdefault("matches",[]).append({"match_id":match_id,"team1":t1,"team2":t2,
+                "score":score,"winner":"draw","date":datetime.utcnow().isoformat(),
+                "added_by":invoker.id,"added_by_oracle":True,"t1_pts":1,"t2_pts":1})
             ok = save()
             if not ok: return "⚠️ Couldn't save. Try again!"
+            await oracle_log("📜 Draw Recorded", f"**{t1}** vs **{t2}** ({score}) — both +1pt | ID:`{match_id}`")
             return f"✅ Draw recorded: **{t1}** vs **{t2}** {score} — both +1pt."
 
         # ── add_bounty ────────────────────────────────────────────────
@@ -952,8 +1075,11 @@ Respond ONLY with valid JSON or null. No explanation, no code blocks, no markdow
             mention = role.mention if role else ""
             embed   = discord.Embed(title=title, description=message,
                 color=0xffd700, timestamp=datetime.utcnow())
-            embed.set_footer(text="⚜️ Majestic Dominion")
+            embed.set_footer(text="⚜️ Majestic Dominion | Oracle Decree")
+            apply = bot_fn("apply_branding")
+            if apply: apply(embed, thumbnail=True, author=True)
             await ann_ch.send(content=f"📢 {mention}" if mention else None, embed=embed)
+            await oracle_log("📢 Announcement Posted", f"**{title}** — sent by Oracle")
             return f"✅ Announcement sent to #{ann_ch.name}: **{title}**"
 
         elif act == "send_message":
@@ -985,6 +1111,7 @@ Respond ONLY with valid JSON or null. No explanation, no code blocks, no markdow
                     description=f"⚔️ **{t1}** vs **{t2}**\n📅 **{dt}**\n\n*Prepare your lineups!*",
                     color=0xffd700, timestamp=datetime.utcnow())
                 await war.send(embed=embed)
+            await oracle_log("📅 Match Scheduled", f"**{t1}** vs **{t2}** — {dt}")
             return f"✅ Scheduled: **{t1}** vs **{t2}** — **{dt}**"
 
         # ── set_points ────────────────────────────────────────────────
@@ -995,17 +1122,51 @@ Respond ONLY with valid JSON or null. No explanation, no code blocks, no markdow
             sq[km]["points"] = pts; ok = save()
             return f"✅ **{km}** points set to **{pts}**." if ok else "⚠️ Couldn't save. Try again!"
 
-        # ── remove_from_squad ─────────────────────────────────────────
+        # ── remove_from_squad — removes Discord role + cleans nickname ──
         elif act == "remove_from_squad":
             mb = find_member(action.get("member",""))
             sm = fuzzy(action.get("squad",""), sq)
-            if not mb: return f"❌ Member '{action.get('member')}' not found."
-            if not sm: return f"❌ Kingdom '{action.get('squad')}' not found."
+            if not mb: return f"⚠️ Member '{action.get('member')}' not found."
+            if not sm: return f"⚠️ Kingdom '{action.get('squad')}' not found."
+
+            # Remove Discord role
+            squad_role = discord.utils.get(guild.roles, name=sm)
+            if squad_role and squad_role in mb.roles:
+                try: await mb.remove_roles(squad_role)
+                except discord.Forbidden: return "⚠️ Bot lacks permission to remove roles."
+
+            # Remove guest role too
+            GUEST_ROLES_d = bot_fn("GUEST_ROLES") or {}
+            grn = GUEST_ROLES_d.get(sm)
+            if grn:
+                gr = discord.utils.get(guild.roles, name=grn)
+                if gr and gr in mb.roles:
+                    try: await mb.remove_roles(gr)
+                    except: pass
+
+            # Clean nickname (remove tag prefix)
+            rm_tags = bot_fn("remove_all_tags")
+            if rm_tags:
+                try:
+                    clean = rm_tags(mb.display_name)
+                    if clean != mb.display_name:
+                        await mb.edit(nick=clean)
+                except: pass
+
+            # Update player data
+            upd_plr = bot_fn("update_player_squad")
+            if upd_plr:
+                try: upd_plr(mb.id, None, sm)
+                except: pass
+
+            # Update roster data
             for slot in ["main_roster","subs"]:
                 if mb.id in sq[sm].get(slot,[]):
                     sq[sm][slot].remove(mb.id)
             ok = save()
-            return f"✅ **{mb.display_name}** removed from **{sm}**." if ok else "⚠️ Couldn't save. Try again!"
+            await oracle_log("➖ Squad Member Removed",
+                f"**{mb.display_name}** removed from **{sm}** | Discord role removed | Nickname cleaned")
+            return f"✅ **{mb.display_name}** removed from **{sm}** — role removed, nickname cleaned." if ok else "⚠️ Couldn't save."
 
         # ── create_role ───────────────────────────────────────────────
         elif act == "create_role":
@@ -1086,30 +1247,76 @@ Respond ONLY with valid JSON or null. No explanation, no code blocks, no markdow
             sm = fuzzy(sq_name, sq)
             if not sm:
                 avail = ", ".join(sq.keys())
-                return f"❌ Kingdom '{sq_name}' not found. Available: {avail}"
-            info    = sq[sm]
-            tag     = self.squads.get(sm,"")
-            pts     = info.get("points",0)
-            w,d,l   = info.get("wins",0), info.get("draws",0), info.get("losses",0)
-            streak  = info.get("streak",0)
-            r_ids   = info.get("main_roster",[])
-            s_ids   = info.get("subs",[])
-            # Build full member index for reliable resolution
-            midx = self._build_member_names_index()
+                return f"Kingdom '{sq_name}' not found. Available: {avail}"
+            info = sq[sm]
+            tag  = self.squads.get(sm,"")
+            pts  = info.get("points",0)
+            w,d,l = info.get("wins",0), info.get("draws",0), info.get("losses",0)
+            # Real streak from current_streak dict
+            cs       = info.get("current_streak", {"type":"none","count":0})
+            streak   = f"{cs.get('count',0)} {cs.get('type','none')}" if cs.get("count",0) > 0 else "none"
+            best_w   = info.get("biggest_win_streak", 0)
+            # Resolve member IDs to names
+            midx     = self._build_member_names_index()
             def rname(uid):
                 s = str(uid)
                 if s in midx: return midx[s]
                 prof = sd.get("profiles",{}).get(s,{})
                 if prof.get("ingame_name"): return prof["ingame_name"]
                 return f"[{s}]"
-            r_names = [rname(uid) for uid in r_ids]
-            s_names = [rname(uid) for uid in s_ids]
+            r_ids    = info.get("main_roster",[])
+            s_ids    = info.get("subs",[])
+            r_names  = [rname(uid) for uid in r_ids]
+            s_names  = [rname(uid) for uid in s_ids]
+            # Get real members from Discord role (ground truth)
+            squad_role = discord.utils.get(guild.roles, name=sm)
+            if squad_role:
+                # Real members = everyone with this Discord role
+                role_members = [mb.display_name for mb in squad_role.members]
+                # Find leaders = members with both squad role AND LEADER role
+                leader_role = discord.utils.get(guild.roles, name="LEADER")
+                if leader_role:
+                    leaders = [mb.display_name for mb in squad_role.members if leader_role in mb.roles]
+                    leader_name = ", ".join(leaders) if leaders else "Not set"
+                else:
+                    leader_name = "Not set"
+            else:
+                # Fallback to roster IDs if role doesn't exist
+                midx = self._build_member_names_index()
+                def rname(uid):
+                    s = str(uid)
+                    if s in midx: return midx[s]
+                    return f"[{s}]"
+                role_members = [rname(uid) for uid in r_ids]
+                leader_name = "Not set"
+            # Recent match history
+            recent_matches = info.get("match_history",[])[-5:][::-1]
+            match_lines = []
+            for m in recent_matches:
+                t1 = m.get("team1","?"); t2 = m.get("team2","?")
+                sc = m.get("score","?")
+                winner = m.get("winner", m.get("team1","?"))
+                result = "draw" if winner == "draw" else ("W" if winner == sm else "L")
+                match_lines.append(f"  {result} vs {'t2' if t1==sm else 't1'} {sc}")
+            match_lines = []
+            for m in recent_matches:
+                opp = m.get("team2","?") if m.get("team1","") == sm else m.get("team1","?")
+                sc  = m.get("score","?")
+                w_val = m.get("winner","draw")
+                if w_val == "draw": res = "D"
+                elif w_val == sm:   res = "W"
+                else:               res = "L"
+                match_lines.append(f"  {res} vs {opp} ({sc})")
+            ach = info.get("achievements",[])
             return (
                 f"**{tag} {sm}**\n"
-                f"Points: {pts} | {w}W/{d}D/{l}L | Streak: {streak}\n"
-                f"Main Roster ({len(r_names)}): {', '.join(r_names) or 'empty'}\n"
-                f"Subs ({len(s_names)}): {', '.join(s_names) or 'none'}\n"
-                f"Achievements: {', '.join(info.get('achievements',[])) or 'none'}"
+                f"Leader: **{leader_name}**\n"
+                f"Points: {pts} | {w}W/{d}D/{l}L\n"
+                f"Current streak: {streak} (best win streak: {best_w})\n"
+                f"Members via Discord role ({len(role_members)}): {', '.join(role_members) or 'empty'}\n"
+                f"Subs in data ({len(s_names)}): {', '.join(s_names) or 'none'}\n"
+                f"Achievements: {', '.join(ach) or 'none'}\n"
+                + (f"Recent matches:\n" + "\n".join(match_lines) if match_lines else "")
             )
 
         elif act == "list_squads":
@@ -1117,25 +1324,38 @@ Respond ONLY with valid JSON or null. No explanation, no code blocks, no markdow
             lines = []
             for i,(n,v) in enumerate(top, 1):
                 tag = self.squads.get(n,"")
-                lines.append(f"#{i} {tag} {n} — {v.get('points',0)}pts {v.get('wins',0)}W/{v.get('losses',0)}L")
+                cs  = v.get("current_streak",{"type":"none","count":0})
+                streak_txt = f" 🔥{cs['count']}" if cs.get("type")=="win" and cs.get("count",0)>=3 else ""
+                lines.append(f"#{i} {tag} **{n}** — {v.get('points',0)}pts {v.get('wins',0)}W/{v.get('draws',0)}D/{v.get('losses',0)}L{streak_txt}")
             return f"**All Kingdoms ({len(top)}):**\n" + "\n".join(lines)
 
         elif act == "get_match_history":
             sq_filter = action.get("kingdom","").lower()
-            matches = sd.get("matches",[])
+            # Support fuzzy kingdom name
             if sq_filter:
-                matches = [m for m in matches
-                           if sq_filter in m.get("team1","").lower()
-                           or sq_filter in m.get("team2","").lower()]
-            limit = int(action.get("limit", 10))
+                sm2 = fuzzy(sq_filter, sq)
+                if sm2:
+                    # Use squad's own match_history for accuracy
+                    matches = sq[sm2].get("match_history", sd.get("matches",[]))
+                    sq_filter = sm2.lower()
+                else:
+                    matches = [m for m in sd.get("matches",[])
+                               if sq_filter in m.get("team1","").lower()
+                               or sq_filter in (m.get("team2","") or "").lower()]
+            else:
+                matches = sd.get("matches",[])
+            limit  = int(action.get("limit",10))
             recent = matches[-limit:][::-1]
             if not recent:
-                return f"No matches found{' for ' + action.get('kingdom','') if sq_filter else ''}."
-            lines = [
-                f"• {m.get('team1','?')} {m.get('score','?')} {m.get('team2','?')} → "
-                f"{'draw' if m.get('winner') == 'draw' else m.get('winner','?') + ' won'} [{m.get('date','?')[:10]}]"
-                for m in recent
-            ]
+                return f"No matches found{' for ' + action.get('kingdom','') if action.get('kingdom') else ''}."
+            lines = []
+            for m in recent:
+                t1 = m.get("team1","?"); t2 = m.get("team2","?")
+                sc = m.get("score","?")
+                w_val = m.get("winner", m.get("team1","?"))
+                result = "draw" if w_val=="draw" else f"{w_val} won"
+                date = (m.get("date","?") or "?")[:10]
+                lines.append(f"• {t1} {sc} {t2} → {result} [{date}]")
             return "\n".join(lines)
 
         elif act == "list_roles":
@@ -1152,6 +1372,7 @@ Respond ONLY with valid JSON or null. No explanation, no code blocks, no markdow
             if not mb: return f"❌ Member '{action.get('member')}' not found."
             try:
                 await mb.ban(reason=reason)
+                await oracle_log("🔨 Member Banned", f"**{mb.display_name}** banned. Reason: {reason}")
                 return f"✅ **{mb.display_name}** banned. Reason: {reason}"
             except discord.Forbidden:
                 return "⚠️ I don't have permission to ban. Check my role position."
@@ -1204,16 +1425,40 @@ Respond ONLY with valid JSON or null. No explanation, no code blocks, no markdow
             old_n = action.get("old_name","")
             new_n = action.get("new_name","")
             matched = fuzzy(old_n, sq)
-            if not matched: return f"❌ Kingdom '{old_n}' not found."
+            if not matched: return f"⚠️ Kingdom '{old_n}' not found."
+
+            # Rename Discord role
+            discord_role = discord.utils.get(guild.roles, name=matched)
+            if discord_role:
+                try: await discord_role.edit(name=new_n)
+                except discord.Forbidden: return "⚠️ Bot lacks permission to rename Discord roles."
+
+            # Update SQUADS dict in bot
+            SQUADS_d = bot_fn("SQUADS")
+            if SQUADS_d is not None:
+                tag = SQUADS_d.pop(matched, "⚔️")
+                SQUADS_d[new_n] = tag
+                sd["squad_registry"] = dict(SQUADS_d)
+            else:
+                tag = self.squads.pop(matched, "⚔️")
+                self.squads[new_n] = tag
+
+            # Update squad data
             sq[new_n] = sq.pop(matched)
-            # Update bounties and challenges references
+            # Update bounties and challenges
             if matched in sd.get("bounties",{}):
                 sd["bounties"][new_n] = sd["bounties"].pop(matched)
             for ch in sd.get("challenges",[]):
                 if ch.get("challenger") == matched: ch["challenger"] = new_n
                 if ch.get("challenged") == matched: ch["challenged"] = new_n
+            # Update match history references
+            for m in sd.get("matches",[]):
+                if m.get("team1") == matched: m["team1"] = new_n
+                if m.get("team2") == matched: m["team2"] = new_n
+                if m.get("winner") == matched: m["winner"] = new_n
             ok = save()
-            return f"✅ **{matched}** renamed to **{new_n}**." if ok else "⚠️ Couldn't save. Try again!"
+            await oracle_log("✏️ Kingdom Renamed", f"**{matched}** → **{new_n}** | Discord role renamed")
+            return f"✅ **{matched}** renamed to **{new_n}** — Discord role, match history, and data all updated." if ok else "⚠️ Couldn't save."
 
         elif act == "replace_registrant":
             ev = next((e for e in sd.get("events",[]) if action.get("event","").lower() in e["name"].lower()), None)
