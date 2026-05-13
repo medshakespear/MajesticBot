@@ -1217,7 +1217,6 @@ Return ONLY the JSON object or null. No explanation."""
 
         # ── create_event ──────────────────────────────────────────────
         elif act == "create_event":
-            import uuid
             eid = str(uuid.uuid4())[:8]
             ev  = {
                 "id":eid, "name":action.get("name","Unnamed Event"),
