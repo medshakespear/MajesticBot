@@ -62,7 +62,7 @@ HISTORY  = 4     # messages kept per user
 VIP_MEMBERS = {
     "am_i_chica_94186": {
         "titles": [
-            "the boss", "your highness", "the one and only",
+            "Queen", "your highness", "the one and only",
             "the legend herself", "our beloved queen", "the CEO of this server",
             "Pretty Chica", "the one who signs the checks"
         ],
@@ -110,8 +110,8 @@ WHO YOU ARE:
 - You speak like someone who plays the game, not a wiki page
 
 HOW YOU TALK:
-- Natural, slightly informal 
-- Short to medium responses.
+- Natural, slightly informal — like texting a friend who knows MLBB
+- Short to medium responses. Never over-explain.
 - No AI phrases: "as an AI", "I understand your concern", "certainly", "absolutely", "of course"
 - No dramatic reactions. No emoji spam.
 - If someone's wrong, say so calmly. Don't just agree with everything.
@@ -141,7 +141,7 @@ BANNED PHRASES: "greetings", "I shall", "as you decree", "hath", "thee", "thou",
 "the realm", "sovereign", "warrior" (unless used naturally in MLBB context)
 
 LANGUAGE:
-- Simple clear English only.
+- Simple clear English only. Short sentences.
 - Talk like a real person, not a bot.
 - Casual and friendly — like texting a gamer friend.
 - No fancy words. No formal language.
@@ -149,8 +149,12 @@ LANGUAGE:
 
 PERSONALITY_MEMBER = PERSONALITY_BASE + """
 MEMBER MODE:
-- Answer questions and give info only — you CANNOT make server changes
-- If someone asks you to change something, tell them to ask a mod
+- You can answer anything — server questions, MLBB tips, general chat, advice, jokes
+- Use the server data to answer questions about rankings, events, and bounties
+- You CANNOT make any changes to the server — if someone asks, just say a mod can do that
+- Don't make everything about the server — if someone just wants to chat or asks a random question, just talk
+- Be a friend, not a server bot
+- Keep it short and natural unless they want detail
 """
 
 PERSONALITY_MOD = PERSONALITY_BASE + """
@@ -177,19 +181,34 @@ class OracleAgent:
         self.daily_log      = []  # global daily request tracker
         self.daily_user_log = {}  # per-user daily tracker {uid: [timestamps]}
 
-        # Groq
-        self.groq = None
-        gk = os.getenv("GROQ_API_KEY")
-        if GROQ_OK and gk:
-            self.groq = AsyncGroq(api_key=gk)
-            print(f"✅ Oracle: Groq ({GROQ_MODEL}) ready — BACKUP")
+        # Groq keys (BACKUP) — supports key rotation
+        self._groq_clients = []
+        self._groq_key_idx = 0
+        groq_keys = [k for k in [
+            os.getenv("GROQ_API_KEY"),
+            os.getenv("GROQ_API_KEY_1"),
+            os.getenv("GROQ_API_KEY_2"),
+        ] if k]
+        if GROQ_OK and groq_keys:
+            self._groq_clients = [AsyncGroq(api_key=k) for k in groq_keys]
+            self.groq = self._groq_clients[0]
+            print(f"✅ Oracle: Groq ({GROQ_MODEL}) ready — BACKUP ({len(groq_keys)} key(s))")
         else:
+            self.groq = None
             print("⚠️  Oracle: No GROQ_API_KEY")
 
-        # Gemini (PRIMARY)
-        self.gemini_key = os.getenv("GEMINI_API_KEY")
-        if self.gemini_key:
-            print(f"✅ Oracle: Gemini ({GEMINI_MODEL}) ready — PRIMARY")
+        # Gemini keys (PRIMARY) — supports key rotation
+        self.gemini_keys = [
+            k for k in [
+                os.getenv("GEMINI_API_KEY"),
+                os.getenv("GEMINI_API_KEY_1"),
+                os.getenv("GEMINI_API_KEY_2"),
+            ] if k
+        ]
+        self.gemini_key = self.gemini_keys[0] if self.gemini_keys else None
+        self._gemini_key_idx = 0
+        if self.gemini_keys:
+            print(f"✅ Oracle: Gemini ({GEMINI_MODEL}) ready — PRIMARY ({len(self.gemini_keys)} key(s))")
         else:
             print("⚠️  Oracle: No GEMINI_API_KEY")
 
@@ -411,53 +430,55 @@ class OracleAgent:
         return resp.choices[0].message.content or ""
 
     async def _groq(self, prompt: str) -> str:
-        """Groq Llama — backup."""
-        if not self.groq:
+        """Groq Llama — backup. Rotates keys on 429."""
+        if not self._groq_clients:
             raise RuntimeError("No Groq client")
-        resp = await self.groq.chat.completions.create(
-            model=GROQ_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=MAX_TOKENS,
-            temperature=0.8,
-        )
-        return resp.choices[0].message.content or ""
+        last_err = None
+        for i, client in enumerate(self._groq_clients):
+            try:
+                resp = await client.chat.completions.create(
+                    model=GROQ_MODEL,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=MAX_TOKENS,
+                    temperature=0.8,
+                )
+                return resp.choices[0].message.content or ""
+            except Exception as e:
+                err = str(e).lower()
+                if "429" in str(e) or "rate" in err or "quota" in err or "token" in err:
+                    print(f"⚠️ Groq key {i+1} rate limited, trying next...")
+                    last_err = e; continue
+                raise
+        raise last_err or RuntimeError("all_groq_keys_failed")
 
     # ── AI call: Gemini REST ──────────────────────────────────────────
 
     async def _gemini(self, prompt: str) -> str:
-        if not self.gemini_key or not AIOHTTP_OK:
+        if not self.gemini_keys or not AIOHTTP_OK:
             raise RuntimeError("Gemini not configured")
-        url = (
-            f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{GEMINI_MODEL}:generateContent?key={self.gemini_key}"
-        )
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "maxOutputTokens": MAX_TOKENS,
-                "temperature": 0.8
-            }
-        }
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                url, json=payload,
-                timeout=aiohttp.ClientTimeout(total=20)
-            ) as resp:
-                if resp.status == 429:
-                    data = await resp.json()
-                    raise RuntimeError("quota_exceeded")
-                if resp.status == 404:
-                    raise RuntimeError("model_not_found")
-                if resp.status == 400:
-                    data = await resp.json()
-                    raise RuntimeError("bad_request")
-                if resp.status != 200:
-                    raise RuntimeError(f"http_{resp.status}")
-                data = await resp.json()
-        try:
-            return data["candidates"][0]["content"]["parts"][0]["text"].strip()
-        except (KeyError, IndexError) as e:
-            raise RuntimeError("unexpected_response")
+        last_err = None
+        for i, key in enumerate(self.gemini_keys):
+            url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+                   f"{GEMINI_MODEL}:generateContent?key={key}")
+            payload = {"contents":[{"parts":[{"text":prompt}]}],
+                       "generationConfig":{"maxOutputTokens":MAX_TOKENS,"temperature":0.8}}
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(url, json=payload,
+                            timeout=aiohttp.ClientTimeout(total=20)) as resp:
+                        if resp.status == 429:
+                            print(f"⚠️ Gemini key {i+1}/{len(self.gemini_keys)} quota hit, trying next...")
+                            last_err = RuntimeError("quota_exceeded"); continue
+                        if resp.status == 404: raise RuntimeError("model_not_found")
+                        if resp.status == 400: raise RuntimeError("bad_request")
+                        if resp.status != 200: raise RuntimeError(f"http_{resp.status}")
+                        data = await resp.json()
+                return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+            except RuntimeError as e:
+                if "quota" in str(e) or "429" in str(e):
+                    last_err = e; continue
+                raise
+        raise last_err or RuntimeError("all_gemini_keys_failed")
 
     # ── Build prompt ──────────────────────────────────────────────────
 
@@ -475,12 +496,38 @@ class OracleAgent:
         except Exception:
             return []
 
+    def _light_context(self) -> str:
+        """Lightweight context for members — only rankings, events, bounties. No full roster details.
+        Reads from cache — no heavy computation."""
+        sd = self.squad_data
+        sq = sd.get("squads", {})
+        top = sorted(sq.items(), key=lambda x: -x[1].get("points", 0))[:10]
+        rankings = " | ".join(
+            f"#{i} {self.squads.get(n,'')} {n} {v.get('points',0)}pts {v.get('wins',0)}W/{v.get('losses',0)}L"
+            for i,(n,v) in enumerate(top, 1)
+        )
+        evs = [f"{e['name']} [{e['status']}] {e.get('date','?')}"
+               for e in sd.get("events",[]) if e.get("status") in ("open","live")]
+        bts = [f"{k}:+{v.get('points',0)}pts" for k,v in sd.get("bounties",{}).items()]
+        recent = sd.get("matches",[])[-5:][::-1]
+        matches = " | ".join(
+            f"{m.get('team1','?')} {m.get('score','?')} {m.get('team2','?')}"
+            for m in recent
+        )
+        return (
+            f"Rankings: {rankings or 'none'}\n"
+            f"Open events: {', '.join(evs) or 'none'}\n"
+            f"Bounties: {', '.join(bts) or 'none'}\n"
+            f"Recent matches: {matches or 'none'}"
+        )
+
     def _build_prompt(self, username: str, text: str, is_mod: bool,
                       history: list, action_result: str | None,
                       vip_info: dict | None = None,
                       invoker=None, guild=None) -> str:
         personality = PERSONALITY_MOD if is_mod else PERSONALITY_MEMBER
-        ctx         = self.context()
+        # Mods get full context, members get lightweight cached context
+        ctx = self.context() if is_mod else self._light_context()
 
         # Get member's actual roles so AI can address them correctly
         member_roles = self._get_member_roles(invoker, guild)
@@ -575,21 +622,6 @@ class OracleAgent:
             raise RuntimeError("all_failed")
 
     async def _extract_action(self, text: str, history: list, ctx: str) -> dict | None:
-        """Extract action from message. Pre-checks obvious patterns, then uses AI."""
-        import re as _re
-
-        sq_keys = list(self.squad_data.get("squads",{}).keys())
-
-        def best_match(raw):
-            raw = raw.strip()
-            raw_l = raw.lower()
-            for k in sq_keys:
-                if k.lower() == raw_l: return k
-            candidates = [k for k in sq_keys if raw_l in k.lower() or k.lower() in raw_l]
-            if candidates: return max(candidates, key=len)
-            return raw
-
-    async def _extract_action(self, text: str, history: list, ctx: str) -> dict | None:
         """Extract action — direct pattern detection first, AI fallback for unclear cases."""
         import re as _re
         sd = self.squad_data
@@ -680,6 +712,11 @@ class OracleAgent:
         # ─────────────────────────────────────────────────────────────
 
         m = R(r'(?:add|put|place|set)\s+(?:a?\s+)?(?:(\d+)\s+)?(?:point\s+)?bounty\s+on\s+(.+?)(?:\s+(\d+)\s*pts?)?$',tl,S)
+        if not m:
+            m = R(r'bounty\s+(?:on|for)\s+(.+?)\s+(?:(\d+)\s+)?pts?',tl,S)
+            if m:
+                k=fq_sq(m.group(1)); pts=int(m.group(2) or 2)
+                if k: return {"action":"add_bounty","kingdom":k,"points":pts}
         if m:
             pts=int(m.group(1) or m.group(3) or 2); k=fq_sq(m.group(2))
             if k: return {"action":"add_bounty","kingdom":k,"points":pts}
@@ -820,8 +857,11 @@ class OracleAgent:
             return {"action":"list_squads"}
 
         m = R(r'(?:match\s+history|recent\s+matches?|results?)\s+(?:for\s+|of\s+)?(.+)',tl,S)
+        if not m:
+            m = R(r'(.+?)\s+(?:match\s+history|recent\s+matches?|last\s+\d+\s+matches?)',tl,S)
         if m:
-            return {"action":"get_match_history","kingdom":fq_sq(m.group(1).strip()) or "","limit":10}
+            kn = m.group(1).strip()
+            return {"action":"get_match_history","kingdom":fq_sq(kn) or "","limit":10}
 
         m = R(r'(?:show|get|view)\s+profile\s+(?:of\s+|for\s+)?(\S+)',tl,S)
         if m: return {"action":"get_profile","member":m.group(1).strip()}
@@ -933,9 +973,13 @@ Return ONLY the JSON object or null. No explanation."""
 
         try:
             raw = await self._ai_call(extraction_prompt)
-            raw = raw.strip().strip("```json").strip("```").strip()
-            if raw.lower() == "null" or not raw or raw == "{}":
-                return None
+            raw = raw.strip()
+            # Remove code fences properly (as substrings, not character sets)
+            if raw.startswith("```json"): raw = raw[7:]
+            if raw.startswith("```"):     raw = raw[3:]
+            if raw.endswith("```"):       raw = raw[:-3]
+            raw = raw.strip()
+            if not raw or raw.lower() in ("null", "none", ""): return None
             return json.loads(raw)
         except json.JSONDecodeError as je:
             print(f"⚠️ Action JSON parse failed: {je} | raw: {raw[:100] if 'raw' in dir() else '?'}")
@@ -946,7 +990,7 @@ Return ONLY the JSON object or null. No explanation."""
 
     async def _execute_extracted(self, action: dict, guild, invoker) -> str:
         """Execute a structured action dict using real bot functions where possible."""
-        import sys
+        import sys, uuid, random
         sd   = self.squad_data
         sq   = sd.get("squads", {})
         act  = action.get("action", "")
@@ -1777,9 +1821,9 @@ Return ONLY the JSON object or null. No explanation."""
 
         action_result = None
 
-        # Chica gets full action access regardless of channel
-        is_vip_action = vip_info is not None
-        if is_mod or is_vip_action:
+        # Actions ONLY from mod-oracle channel with KNIGHTS role
+        # Members get read-only access — saves tokens, preserves quota
+        if is_mod:
             try:
                 ctx = self.context()
                 action_data = await self._extract_action(text, history, ctx)
