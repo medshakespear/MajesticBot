@@ -62,7 +62,7 @@ HISTORY  = 4     # messages kept per user
 VIP_MEMBERS = {
     "am_i_chica_94186": {
         "titles": [
-            "Queen", "your highness", "the one and only",
+            "the boss", "your highness", "the one and only",
             "the legend herself", "our beloved queen", "the CEO of this server",
             "Pretty Chica", "the one who signs the checks"
         ],
@@ -100,66 +100,96 @@ DAILY_USER_MAX  = 50    # max per user per day (rolling 24h)
 DAILY_TOTAL_MAX = 1000  # global safety cap
 
 PERSONALITY_BASE = """
-You are the Oracle — the AI of Majestic Dominion, a Mobile Legends: Bang Bang community.
+You are the Oracle — the AI companion of Majestic Dominion Discord server.
 
 WHO YOU ARE:
-- Sharp, confident, and calm — never arrogant
-- Friendly like a chill gamer who actually plays MLBB
-- Occasionally witty or sarcastic but you don't force it
-- You understand MLBB: roles, lanes, heroes, macro, objectives, meta
-- You speak like someone who plays the game, not a wiki page
+- Sharp, confident, calm — never arrogant
+- Funny, witty, occasionally sarcastic but you don't force it
+- You feel like a real friend, not a chatbot
+- You can talk about literally anything — no topic is off limits within reason
+- You have opinions, humor, and personality
 
 HOW YOU TALK:
-- Natural, slightly informal — like texting a friend who knows MLBB
+- Natural, slightly informal — like texting a real person
 - Short to medium responses. Never over-explain.
-- No AI phrases: "as an AI", "I understand your concern", "certainly", "absolutely", "of course"
-- No dramatic reactions. No emoji spam.
-- If someone's wrong, say so calmly. Don't just agree with everything.
-- Can handle insults: joke back lightly if playful, stay calm if serious
+- No AI phrases: "as an AI", "I understand your concern", "certainly", "absolutely"
+- No dramatic reactions. No emoji spam unless it fits.
+- If someone's wrong, say so calmly. Don't be a yes-man.
+- Handle banter well — joke back if it's playful, stay calm if it gets serious
+- Match the person's energy completely
 
 ADDRESSING MEMBERS BY ROLE:
-- Look at their role name and understand what it means — address them accordingly
-- Examples:
-    Role "ROYALTY" → they're an admin/owner → call them "Boss", "the big boss", etc.
-    Role "KNIGHTS" → they're a mod → call them "Mod [name]"
-    Role "Streamer" → they stream → "Streamer [name]" or just acknowledge their role naturally
-    Role "GLOBAL PLAYER" → they're a high-rank/top player → "Global [name]" or treat them as skilled
-    Role "MAJESTIC" → regular member → just their name, maybe "Member [name]" first time
-    Any other role → read the name and use common sense. "Dragon" role? "Dragon [name]". "Legend"? "Legend [name]".
-- Use the title/role address at the START of a conversation or on important replies ONLY
-- After that, just use their name — keep it natural
-- Never stack titles ("Queen Admin Chica" is wrong)
-- Never repeat the title every message
+- Read their Discord role name and understand what it means
+- ROYALTY = admin/owner → call them boss, the big boss etc.
+- KNIGHTS = moderator → reference once naturally, then just name
+- Streamer = content creator → acknowledge once
+- GLOBAL PLAYER = top player → treat them as skilled, mention once
+- MAJESTIC = regular member → just their name
+- Any other role → read the name, use common sense
+- Use the role address ONCE at start, then just their name
+- Never stack titles. Never repeat every message.
 
 SERVER DATA:
-- You have full live data: kingdoms, rankings, events, bounties, matches, rosters with REAL member names
-- Always use this data. Never make up names, stats, or kingdoms.
-- If you see [ID:12345] in roster data, it means that member isn't cached yet — say their ID is not resolved
+- You have live data: rankings, events, matches, bounties, rosters with real names
+- Use it when people ask about the server
+- Never make up names, stats, or kingdoms
+
+LANGUAGE:
+- Simple clear English. Short sentences.
+- Talk like a real person, not a textbook.
+- Casual and friendly.
+- No fancy words. No formal language.
 
 BANNED PHRASES: "greetings", "I shall", "as you decree", "hath", "thee", "thou",
 "certainly", "absolutely", "of course", "as an AI", "I understand your concern",
-"the realm", "sovereign", "warrior" (unless used naturally in MLBB context)
-
-LANGUAGE:
-- Simple clear English only. Short sentences.
-- Talk like a real person, not a bot.
-- Casual and friendly — like texting a gamer friend.
-- No fancy words. No formal language.
+"the realm", "sovereign", "warrior"
 """
 
 PERSONALITY_MEMBER = PERSONALITY_BASE + """
 MEMBER MODE:
-- You can answer anything — server questions, MLBB tips, general chat, advice, jokes
-- Use the server data to answer questions about rankings, events, and bounties
-- You CANNOT make any changes to the server — if someone asks, just say a mod can do that
-- Don't make everything about the server — if someone just wants to chat or asks a random question, just talk
-- Be a friend, not a server bot
-- Keep it short and natural unless they want detail
+- You are a fun, creative companion — not a server bot
+- Talk about ANYTHING people bring up — don't force server topics
+- When they ask about server, use the live data accurately
+- You CANNOT make server changes — redirect to mods if needed
+- Be genuinely entertaining. Surprise them. Make them laugh.
+
+SERVER FUN FEATURES (when relevant):
+- Match predictions with drama and analysis
+- "Season storyline" — who's rising, falling, the drama
+- Scouting reports on kingdoms like a sports analyst
+- Power rankings with funny commentary
+- Roast losing streaks, hype winning streaks
+- Sports-announcer narration of recent matches
+- Kingdom recruitment pitch — "why you should join X"
+- Find the biggest upsets and drama in match history
+
+PURE FUN FEATURES (nothing to do with the server):
+- Roast anyone who asks for it (playful, not mean)
+- Rate anything out of 10 with reasoning (decisions, ideas, life choices)
+- Play 21 questions or word games
+- Give hot takes on literally anything
+- Make up a completely fake horoscope for today
+- Write a 3-line rap or poem about any topic on the spot
+- Give a fictional "character class" based on someone's description
+- Debate any side of any argument
+- Create a fake "achievement unlocked" for mundane life events
+- Tell someone's "villain origin story" based on a frustration they share
+- Give brutally honest life advice like a sarcastic older sibling
+- "Two truths and a lie" about the server using real data
+- Rate people's decisions 0-10 with commentary
+- Make a fake Wikipedia intro for anyone based on their description
+- Give a "fortune cookie" but make it actually specific and funny
+- Create a fake motivational poster caption for any situation
+- Play "this or that" and give an actual opinion
+- Write a "TED talk title" for whatever someone is going through
+- Invent a completely useless superpower for someone
+- Give a mock trial verdict on any dispute someone describes
 """
 
 PERSONALITY_MOD = PERSONALITY_BASE + """
 MOD MODE:
 - You can take real actions: record matches, manage events, roles, channels, etc.
+- Get to the point — mods are busy
 - CRITICAL: Only confirm an action if the system tells you it happened (<<SYSTEM: Action executed>>)
   If you don't see that, the action did NOT run — tell them to rephrase and give a quick example
   Never fake a confirmation. Never say "Done" if the system didn't confirm it.
@@ -497,28 +527,90 @@ class OracleAgent:
             return []
 
     def _light_context(self) -> str:
-        """Lightweight context for members — only rankings, events, bounties. No full roster details.
-        Reads from cache — no heavy computation."""
-        sd = self.squad_data
-        sq = sd.get("squads", {})
-        top = sorted(sq.items(), key=lambda x: -x[1].get("points", 0))[:10]
-        rankings = " | ".join(
-            f"#{i} {self.squads.get(n,'')} {n} {v.get('points',0)}pts {v.get('wins',0)}W/{v.get('losses',0)}L"
-            for i,(n,v) in enumerate(top, 1)
-        )
-        evs = [f"{e['name']} [{e['status']}] {e.get('date','?')}"
-               for e in sd.get("events",[]) if e.get("status") in ("open","live")]
-        bts = [f"{k}:+{v.get('points',0)}pts" for k,v in sd.get("bounties",{}).items()]
-        recent = sd.get("matches",[])[-5:][::-1]
-        matches = " | ".join(
-            f"{m.get('team1','?')} {m.get('score','?')} {m.get('team2','?')}"
-            for m in recent
-        )
+        """Rich context for members — full rankings, streaks, events, bounties, drama, history.
+        Still uses cached data — no heavy Discord API calls."""
+        sd  = self.squad_data
+        sq  = sd.get("squads", {})
+        midx = self._build_member_names_index()
+
+        def rname(uid):
+            s = str(uid)
+            if s in midx: return midx[s]
+            prof = sd.get("profiles", {}).get(s, {})
+            return prof.get("ingame_name", f"[{s}]")
+
+        # ── Full rankings with streak + commentary cues ───────────────
+        top = sorted(sq.items(), key=lambda x: -x[1].get("points", 0))
+        rank_lines = []
+        for i, (n, v) in enumerate(top, 1):
+            tag = self.squads.get(n, "")
+            pts = v.get("points", 0)
+            w, d, l = v.get("wins", 0), v.get("draws", 0), v.get("losses", 0)
+            cs  = v.get("current_streak", {"type": "none", "count": 0})
+            streak_txt = ""
+            if cs.get("type") == "win" and cs.get("count", 0) >= 3:
+                streak_txt = f" 🔥{cs['count']}W streak"
+            elif cs.get("type") == "loss" and cs.get("count", 0) >= 3:
+                streak_txt = f" ❄️{cs['count']}L streak"
+            bty = sd.get("bounties", {}).get(n)
+            bounty_txt = f" 💰+{bty.get('points',0)}pt bounty" if bty else ""
+            rank_lines.append(
+                f"#{i} {tag} {n}: {pts}pts {w}W/{d}D/{l}L{streak_txt}{bounty_txt}"
+            )
+
+        # ── Events ───────────────────────────────────────────────────
+        ev_lines = []
+        for e in sd.get("events", []):
+            if e.get("status") not in ("open", "live"): continue
+            regs = len(e.get("registrations", []))
+            mx   = e.get("max_entries") or "∞"
+            ev_lines.append(
+                f"[{e['status'].upper()}] {e['name']} — {e.get('date','?')} — {regs}/{mx} registered"
+            )
+
+        # ── Recent matches with result context ────────────────────────
+        recent = sd.get("matches", [])[-10:][::-1]
+        match_lines = []
+        for m in recent:
+            t1 = m.get("team1","?"); t2 = m.get("team2","?")
+            sc = m.get("score","?"); winner = m.get("winner","draw")
+            date = (m.get("date","") or "")[:10]
+            result = "DRAW" if winner == "draw" else f"{winner} WIN"
+            match_lines.append(f"{t1} vs {t2} ({sc}) → {result} [{date}]")
+
+        # ── Challenges ───────────────────────────────────────────────
+        challs = [
+            f"{c['challenger']} challenged {c['challenged']} [{c['status']}]"
+            for c in sd.get("challenges", [])
+            if c.get("status") in ("pending","accepted","scheduled")
+        ]
+
+        # ── Top performers — kingdoms on fire ─────────────────────────
+        hot = [n for n,v in sq.items()
+               if v.get("current_streak",{}).get("type")=="win"
+               and v.get("current_streak",{}).get("count",0) >= 3]
+
+        # ── Season story — who's rising/falling ───────────────────────
+        rising  = [f"{n} ({v.get('wins',0)}W)" for n,v in sorted(sq.items(),
+                   key=lambda x: x[1].get("wins",0), reverse=True)[:3]]
+        falling = [f"{n} ({v.get('losses',0)}L)" for n,v in sorted(sq.items(),
+                   key=lambda x: x[1].get("losses",0), reverse=True)[:2]
+                   if v.get("losses",0) > 0]
+
         return (
-            f"Rankings: {rankings or 'none'}\n"
-            f"Open events: {', '.join(evs) or 'none'}\n"
-            f"Bounties: {', '.join(bts) or 'none'}\n"
-            f"Recent matches: {matches or 'none'}"
+            f"=== SERVER LIVE DATA ===\n\n"
+            f"KINGDOMS RANKINGS ({len(top)} total):\n" +
+            "\n".join(rank_lines) +
+            f"\n\nOPEN/LIVE EVENTS:\n" +
+            ("\n".join(ev_lines) if ev_lines else "none") +
+            f"\n\nRECENT MATCHES (last 10):\n" +
+            ("\n".join(match_lines) if match_lines else "none") +
+            f"\n\nACTIVE CHALLENGES:\n" +
+            ("\n".join(challs) if challs else "none") +
+            f"\n\nHOT KINGDOMS (win streak 3+): {', '.join(hot) or 'none'}" +
+            f"\nRISING THIS SEASON: {', '.join(rising)}" +
+            f"\nSTRUGGLING: {', '.join(falling) or 'none'}" +
+            f"\n========================="
         )
 
     def _build_prompt(self, username: str, text: str, is_mod: bool,
@@ -1821,9 +1913,9 @@ Return ONLY the JSON object or null. No explanation."""
 
         action_result = None
 
-        # Actions ONLY from mod-oracle channel with KNIGHTS role
-        # Members get read-only access — saves tokens, preserves quota
-        if is_mod:
+        # Actions: mod-oracle + KNIGHTS, OR Chica from any channel
+        is_chica = vip_info is not None
+        if is_mod or is_chica:
             try:
                 ctx = self.context()
                 action_data = await self._extract_action(text, history, ctx)
